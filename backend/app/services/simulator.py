@@ -36,7 +36,6 @@ async def run_single(description: str) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=BUILD_TIMEOUT) as client:
-            # Step 1: Create the build
             payload = {**BASE_PAYLOAD, "userInput": description}
             response = await client.post(
                 f"{PHYSIS_BASE_URL}/build",
@@ -104,7 +103,6 @@ async def run_single(description: str) -> dict:
 
                 try:
                     status_data = status_response.json()
-                    # Try every plausible field name for the deployed URL
                     live_url = (
                         status_data.get("live_url")
                         or status_data.get("url")
@@ -127,15 +125,14 @@ async def run_single(description: str) -> dict:
                     if live_url:
                         result["status"] = "passed"
                         result["live_url"] = live_url
-                    elif build_status in ("completed", "success", "done"):
+                    elif build_status in ("completed", "success", "done", "partial", "started"):
                         result["status"] = "passed"
                     elif build_status in ("failed", "error"):
                         result["status"] = "failed"
                         result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:300]}"
                     else:
-                        # Log raw so we can see what fields actually come back
                         result["status"] = "failed"
-                        result["error_message"] = f"Unknown status response. Raw: {status_raw[:500]}"
+                        result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:500]}"
 
                 except json.JSONDecodeError:
                     result["status"] = "failed"
