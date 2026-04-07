@@ -14,12 +14,13 @@ BASE_PAYLOAD = {
     "targetUser": "general user",
     "outputFormat": "web application",
     "outputLength": "full",
-    "specialRules": "",
+    "specialRules": "none",
     "interactionStyle": "simple and intuitive",
     "usageFrequency": "daily",
     "toneStyle": "friendly",
     "themeColor": "blue",
     "complexity": "medium",
+    "successMeasure": "user can complete the main task easily",
     "selectedName": "",
     "selectedTagline": "",
     "selectedSubdomain": "",
@@ -75,7 +76,6 @@ async def run_single(description: str) -> dict:
                 build_id = None
 
             if not build_id:
-                # Some builds return {} and embed ID in headers or stream
                 result["status"] = "failed"
                 result["error_message"] = f"POST /build returned 200 but no build_id found. Response: {response.text[:300]}"
                 result["build_time_seconds"] = round(time.time() - start, 2)
