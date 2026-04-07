@@ -3,12 +3,9 @@ import json
 import time
 
 PHYSIS_BASE_URL = "https://physis.onrender.com"
-BUILD_TIMEOUT = 30    # POST /build should respond quickly with a build_id
-STREAM_TIMEOUT = 120  # SSE stream can take up to 90s
+BUILD_TIMEOUT = 30
+STREAM_TIMEOUT = 120
 
-# Realistic simulated user persona sent with every build request.
-# These map to the BuildRequest schema fields seen in /docs.
-# userInput is the only field that varies per scenario.
 BASE_PAYLOAD = {
     "generates": "web app",
     "targetUser": "general user",
@@ -27,11 +24,6 @@ BASE_PAYLOAD = {
 }
 
 async def run_single(description: str) -> dict:
-    """
-    Full Physis build flow:
-      1. POST /build  → get build_id
-      2. GET  /build/{build_id}/stream  → consume SSE until done, capture live_url
-    """
     result = {
         "status": "error",
         "build_time_seconds": None,
@@ -44,7 +36,7 @@ async def run_single(description: str) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=BUILD_TIMEOUT) as client:
-            # ── Step 1: Create the build ──────────────────────────
+            # Step 1: Create the build
             payload = {**BASE_PAYLOAD, "userInput": description}
             response = await client.post(
                 f"{PHYSIS_BASE_URL}/build",
@@ -64,7 +56,6 @@ async def run_single(description: str) -> dict:
                 result["build_time_seconds"] = round(time.time() - start, 2)
                 return result
 
-            # Extract build_id from response
             try:
                 build_data = response.json()
                 build_id = (
@@ -81,11 +72,9 @@ async def run_single(description: str) -> dict:
                 result["build_time_seconds"] = round(time.time() - start, 2)
                 return result
 
-        # ── Step 2: Stream the build result ───────────────────────
+        # Step 2: Consume the SSE stream
         stream_url = f"{PHYSIS_BASE_URL}/build/{build_id}/stream"
         sse_events = []
-        live_url = None
-        stream_error = None
 
         try:
             timeout = httpx.Timeout(10.0, read=STREAM_TIMEOUT)
@@ -94,26 +83,9 @@ async def run_single(description: str) -> dict:
                     async for line in stream.aiter_lines():
                         if not line.strip():
                             continue
-
-                        # SSE lines start with "data: "
                         if line.startswith("data:"):
                             raw = line[5:].strip()
                             sse_events.append(raw)
-                            try:
-                                event = json.loads(raw)
-                                # Look for live_url in any event
-                                live_url = (
-                                    live_url
-                                    or event.get("live_url")
-                                    or event.get("url")
-                                    or event.get("deployed_url")
-                                    or event.get("deployment_url")
-                                )
-                                # Detect terminal error events
-                                if event.get("type") == "error" or event.get("error"):
-                                    stream_error = event.get("error") or event.get("message") or "Build error in stream"
-                            except json.JSONDecodeError:
-                                pass  # non-JSON SSE line, skip
 
         except httpx.TimeoutException:
             result["status"] = "failed"
@@ -122,21 +94,58 @@ async def run_single(description: str) -> dict:
             result["physis_response"] = json.dumps(sse_events[-5:]) if sse_events else None
             return result
 
-        # ── Evaluate result ───────────────────────────────────────
-        elapsed = round(time.time() - start, 2)
-        result["build_time_seconds"] = elapsed
-        result["physis_response"] = json.dumps(sse_events[-10:])[:5000]  # last 10 events, capped
+        # Step 3: Poll /status for the final result
+        status_url = f"{PHYSIS_BASE_URL}/build/{build_id}/status"
+        try:
+            async with httpx.AsyncClient(timeout=15) as status_client:
+                status_response = await status_client.get(status_url)
+                status_raw = status_response.text
+                result["physis_response"] = status_raw[:5000]
 
-        if stream_error:
+                try:
+                    status_data = status_response.json()
+                    # Try every plausible field name for the deployed URL
+                    live_url = (
+                        status_data.get("live_url")
+                        or status_data.get("url")
+                        or status_data.get("deployed_url")
+                        or status_data.get("deployment_url")
+                        or status_data.get("site_url")
+                        or status_data.get("app_url")
+                        or status_data.get("subdomain")
+                    )
+
+                    build_status = (
+                        status_data.get("status")
+                        or status_data.get("state")
+                        or status_data.get("build_status")
+                    )
+
+                    elapsed = round(time.time() - start, 2)
+                    result["build_time_seconds"] = elapsed
+
+                    if live_url:
+                        result["status"] = "passed"
+                        result["live_url"] = live_url
+                    elif build_status in ("completed", "success", "done"):
+                        result["status"] = "passed"
+                    elif build_status in ("failed", "error"):
+                        result["status"] = "failed"
+                        result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:300]}"
+                    else:
+                        # Log raw so we can see what fields actually come back
+                        result["status"] = "failed"
+                        result["error_message"] = f"Unknown status response. Raw: {status_raw[:500]}"
+
+                except json.JSONDecodeError:
+                    result["status"] = "failed"
+                    result["error_message"] = f"Status endpoint returned non-JSON: {status_raw[:300]}"
+                    result["build_time_seconds"] = round(time.time() - start, 2)
+
+        except Exception as e:
             result["status"] = "failed"
-            result["error_message"] = stream_error
-        elif live_url:
-            result["status"] = "passed"
-            result["live_url"] = live_url
-        else:
-            # Stream completed but no live_url — treat as failed
-            result["status"] = "failed"
-            result["error_message"] = "Build stream completed but no live_url was returned"
+            result["error_message"] = f"Status check failed: {str(e)}"
+            result["build_time_seconds"] = round(time.time() - start, 2)
 
     except httpx.ConnectError:
         result["status"] = "error"
