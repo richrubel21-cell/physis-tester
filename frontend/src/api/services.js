@@ -28,6 +28,10 @@ export const api = {
     client.get(`/analytics/batch/${batchId}`).then(r => r.data),
 
   // Mary testing vertical
-  startMaryBatch: () =>
-    client.post("/mary/batch").then(r => r.data),
+  startMaryBatch: (count = 10, useAi = true) =>
+    client.post("/mary/batch", { count, use_ai: useAi }).then(r => r.data),
+  getMaryBatch: (batchId) =>
+    client.get(`/mary/batch/${batchId}`).then(r => r.data),
+  listMaryBatches: () =>
+    client.get("/mary/").then(r => r.data),
 };
