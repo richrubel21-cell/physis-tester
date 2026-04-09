@@ -23,7 +23,12 @@ export default function BatchMonitor({ batchId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [hasFetched, setHasFetched] = useState(false);
 
-  const isRunning = batch?.status === "running" || batch?.status === "pending";
+  // FIX: stop polling on any terminal state, not just when status is 'running'/'pending'
+  // Previously: batch?.status === "running" || batch?.status === "pending"
+  // Bug: backend sets final status to "completed" — which is neither, so polling never stopped
+  const isRunning = batch
+    ? !["completed", "failed", "cancelled"].includes(batch.status)
+    : false;
 
   async function fetchBatch() {
     try {
