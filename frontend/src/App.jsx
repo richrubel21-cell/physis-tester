@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import BatchMonitor from "./pages/BatchMonitor";
+import MaryMonitor from "./pages/MaryMonitor";
 import Failures from "./pages/Failures";
 
 const globalStyle = `
@@ -10,8 +11,9 @@ const globalStyle = `
 `;
 
 export default function App() {
-  const [page, setPage] = useState("dashboard");
+  const [page,          setPage]          = useState("dashboard");
   const [activeBatchId, setActiveBatchId] = useState(null);
+  const [maryResult,    setMaryResult]    = useState(null);
 
   function handleStartBatch(batchId) {
     setActiveBatchId(batchId);
@@ -21,6 +23,12 @@ export default function App() {
   function handleViewBatch(batchId) {
     setActiveBatchId(batchId);
     setPage("batch");
+  }
+
+  // Mary batches return results immediately — no polling needed
+  function handleMaryResult(result) {
+    setMaryResult(result);
+    setPage("mary");
   }
 
   return (
@@ -42,7 +50,7 @@ export default function App() {
         </span>
         {[
           { id: "dashboard", label: "Dashboard" },
-          { id: "failures", label: "Failures" },
+          { id: "failures",  label: "Failures"  },
         ].map(n => (
           <button
             key={n.id}
@@ -66,10 +74,23 @@ export default function App() {
 
       {/* Pages */}
       {page === "dashboard" && (
-        <Dashboard onStartBatch={handleStartBatch} onViewBatch={handleViewBatch} />
+        <Dashboard
+          onStartBatch={handleStartBatch}
+          onViewBatch={handleViewBatch}
+          onMaryResult={handleMaryResult}
+        />
       )}
       {page === "batch" && activeBatchId && (
-        <BatchMonitor batchId={activeBatchId} onBack={() => setPage("dashboard")} />
+        <BatchMonitor
+          batchId={activeBatchId}
+          onBack={() => setPage("dashboard")}
+        />
+      )}
+      {page === "mary" && (
+        <MaryMonitor
+          result={maryResult}
+          onBack={() => setPage("dashboard")}
+        />
       )}
       {page === "failures" && (
         <Failures onBack={() => setPage("dashboard")} />
