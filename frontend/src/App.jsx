@@ -11,9 +11,9 @@ const globalStyle = `
 `;
 
 export default function App() {
-  const [page,          setPage]          = useState("dashboard");
-  const [activeBatchId, setActiveBatchId] = useState(null);
-  const [maryResult,    setMaryResult]    = useState(null);
+  const [page,           setPage]          = useState("dashboard");
+  const [activeBatchId,  setActiveBatchId] = useState(null);
+  const [activeMaryId,   setActiveMaryId]  = useState(null);
 
   function handleStartBatch(batchId) {
     setActiveBatchId(batchId);
@@ -25,9 +25,9 @@ export default function App() {
     setPage("batch");
   }
 
-  // Mary batches return results immediately — no polling needed
-  function handleMaryResult(result) {
-    setMaryResult(result);
+  // Mary batches now poll just like build batches
+  function handleViewMaryBatch(batchId) {
+    setActiveMaryId(batchId);
     setPage("mary");
   }
 
@@ -52,21 +52,8 @@ export default function App() {
           { id: "dashboard", label: "Dashboard" },
           { id: "failures",  label: "Failures"  },
         ].map(n => (
-          <button
-            key={n.id}
-            onClick={() => setPage(n.id)}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: page === n.id ? "#89b4fa" : "#6c7086",
-              borderBottom: page === n.id ? "2px solid #89b4fa" : "2px solid transparent",
-              padding: "0 12px",
-              height: "52px",
-              cursor: "pointer",
-              fontSize: "14px",
-              fontWeight: page === n.id ? "600" : "400",
-            }}
-          >
+          <button key={n.id} onClick={() => setPage(n.id)}
+            style={{ background: "transparent", border: "none", color: page === n.id ? "#89b4fa" : "#6c7086", borderBottom: page === n.id ? "2px solid #89b4fa" : "2px solid transparent", padding: "0 12px", height: "52px", cursor: "pointer", fontSize: "14px", fontWeight: page === n.id ? "600" : "400" }}>
             {n.label}
           </button>
         ))}
@@ -77,20 +64,14 @@ export default function App() {
         <Dashboard
           onStartBatch={handleStartBatch}
           onViewBatch={handleViewBatch}
-          onMaryResult={handleMaryResult}
+          onViewMaryBatch={handleViewMaryBatch}
         />
       )}
       {page === "batch" && activeBatchId && (
-        <BatchMonitor
-          batchId={activeBatchId}
-          onBack={() => setPage("dashboard")}
-        />
+        <BatchMonitor batchId={activeBatchId} onBack={() => setPage("dashboard")} />
       )}
-      {page === "mary" && (
-        <MaryMonitor
-          result={maryResult}
-          onBack={() => setPage("dashboard")}
-        />
+      {page === "mary" && activeMaryId && (
+        <MaryMonitor batchId={activeMaryId} onBack={() => setPage("dashboard")} />
       )}
       {page === "failures" && (
         <Failures onBack={() => setPage("dashboard")} />
