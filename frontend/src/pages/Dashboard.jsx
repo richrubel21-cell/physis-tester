@@ -18,17 +18,18 @@ const statBox = {
   flex: 1,
 };
 
-export default function Dashboard({ onStartBatch, onViewBatch }) {
-  const [summary, setSummary] = useState(null);
-  const [batches, setBatches] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function Dashboard({ onStartBatch, onViewBatch, onMaryResult }) {
+  const [summary,  setSummary]  = useState(null);
+  const [batches,  setBatches]  = useState([]);
+  const [loading,  setLoading]  = useState(true);
   const [starting, setStarting] = useState(false);
-  const [count, setCount] = useState(10);
-  const [useAi, setUseAi] = useState(true);
+  const [startingMary, setStartingMary] = useState(false);
+  const [count,    setCount]    = useState(10);
+  const [useAi,    setUseAi]    = useState(true);
 
   useEffect(() => {
     loadData();
-  }, []); // runs on every mount, so returning from BatchMonitor refreshes stats
+  }, []);
 
   async function loadData() {
     try {
@@ -51,6 +52,19 @@ export default function Dashboard({ onStartBatch, onViewBatch }) {
       alert("Failed to start batch: " + (e.response?.data?.detail || e.message));
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function handleStartMaryBatch() {
+    setStartingMary(true);
+    try {
+      const result = await api.startMaryBatch();
+      // Mary batches return results immediately — pass to Mary monitor
+      onMaryResult(result);
+    } catch (e) {
+      alert("Failed to run Mary batch: " + (e.response?.data?.detail || e.message));
+    } finally {
+      setStartingMary(false);
     }
   }
 
@@ -163,7 +177,51 @@ export default function Dashboard({ onStartBatch, onViewBatch }) {
               {starting ? "Starting..." : "Run Batch"}
             </button>
           </div>
+
+          {/* Mary batch button — separated visually */}
+          <div style={{
+            marginTop: "18px",
+            marginLeft: "8px",
+            paddingLeft: "16px",
+            borderLeft: "1px solid #313244",
+          }}>
+            <button
+              onClick={handleStartMaryBatch}
+              disabled={startingMary}
+              style={{
+                background: startingMary ? "#313244" : "#2a1e3a",
+                border: `1px solid ${startingMary ? "#313244" : "#7c3aed"}`,
+                borderRadius: "8px",
+                color: startingMary ? "#6c7086" : "#c4b5fd",
+                padding: "10px 20px",
+                cursor: startingMary ? "not-allowed" : "pointer",
+                fontWeight: "700",
+                fontSize: "15px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              {startingMary ? (
+                <>⏳ Testing Mary...</>
+              ) : (
+                <>🦋 Test Mary</>
+              )}
+            </button>
+          </div>
         </div>
+
+        {/* Mary batch description */}
+        {!startingMary && (
+          <p style={{ color: "#6c7086", fontSize: "12px", marginTop: "12px" }}>
+            🦋 Mary Test fires 5 context-aware prompts at Mary across all screens and scores her responses for accuracy, persona, and speakability. Takes ~20 seconds.
+          </p>
+        )}
+        {startingMary && (
+          <p style={{ color: "#c4b5fd", fontSize: "12px", marginTop: "12px" }}>
+            Asking Mary questions across all 5 screens — scoring responses...
+          </p>
+        )}
       </div>
 
       {/* Recent Batches */}
@@ -179,7 +237,7 @@ export default function Dashboard({ onStartBatch, onViewBatch }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #313244" }}>
-                {["ID", "Status", "Pass Rate", "Runs", "Started"].map(h => (
+                {["ID", "Type", "Status", "Pass Rate", "Runs", "Started"].map(h => (
                   <th key={h} style={{ color: "#6c7086", fontSize: "12px", textAlign: "left", padding: "8px 0", fontWeight: "600" }}>
                     {h}
                   </th>
@@ -187,38 +245,55 @@ export default function Dashboard({ onStartBatch, onViewBatch }) {
               </tr>
             </thead>
             <tbody>
-              {batches.map(b => (
-                <tr
-                  key={b.batch_id}
-                  onClick={() => onViewBatch(b.batch_id)}
-                  style={{ borderBottom: "1px solid #181825", cursor: "pointer" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "#181825"}
-                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                >
-                  <td style={{ color: "#89b4fa", padding: "10px 0", fontSize: "14px" }}>#{b.batch_id}</td>
-                  <td style={{ padding: "10px 0" }}>
-                    <span style={{
-                      background: b.status === "completed" ? "#1e3a2e" : b.status === "running" ? "#1e2a3a" : "#2a1e1e",
-                      color: b.status === "completed" ? "#a6e3a1" : b.status === "running" ? "#89b4fa" : "#f38ba8",
-                      borderRadius: "6px",
-                      padding: "2px 10px",
-                      fontSize: "12px",
-                      fontWeight: "600",
-                    }}>
-                      {b.status}
-                    </span>
-                  </td>
-                  <td style={{ color: passColor(b.total > 0 ? Math.round(b.passed / b.total * 100) : 0), padding: "10px 0", fontSize: "14px" }}>
-                    {b.total > 0 ? Math.round(b.passed / b.total * 100) : 0}%
-                  </td>
-                  <td style={{ color: "#cdd6f4", padding: "10px 0", fontSize: "14px" }}>
-                    {b.completed}/{b.total}
-                  </td>
-                  <td style={{ color: "#6c7086", padding: "10px 0", fontSize: "13px" }}>
-                    {new Date(b.started_at).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
+              {batches.map(b => {
+                const isMary    = b.batch_type === "mary";
+                const rate      = b.total > 0 ? Math.round(b.passed / b.total * 100) : 0;
+                return (
+                  <tr
+                    key={b.batch_id}
+                    onClick={() => !isMary && onViewBatch(b.batch_id)}
+                    style={{
+                      borderBottom: "1px solid #181825",
+                      cursor: isMary ? "default" : "pointer",
+                      opacity: isMary ? 0.85 : 1,
+                    }}
+                    onMouseEnter={e => { if (!isMary) e.currentTarget.style.background = "#181825"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <td style={{ color: "#89b4fa", padding: "10px 0", fontSize: "14px" }}>#{b.batch_id}</td>
+                    <td style={{ padding: "10px 0" }}>
+                      <span style={{
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        color: isMary ? "#c4b5fd" : "#6c7086",
+                      }}>
+                        {isMary ? "🦋 Mary" : "🧪 Build"}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px 0" }}>
+                      <span style={{
+                        background: b.status === "completed" ? "#1e3a2e" : b.status === "running" ? "#1e2a3a" : "#2a1e1e",
+                        color: b.status === "completed" ? "#a6e3a1" : b.status === "running" ? "#89b4fa" : "#f38ba8",
+                        borderRadius: "6px",
+                        padding: "2px 10px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                      }}>
+                        {b.status}
+                      </span>
+                    </td>
+                    <td style={{ color: passColor(rate), padding: "10px 0", fontSize: "14px" }}>
+                      {rate}%
+                    </td>
+                    <td style={{ color: "#cdd6f4", padding: "10px 0", fontSize: "14px" }}>
+                      {b.completed}/{b.total}
+                    </td>
+                    <td style={{ color: "#6c7086", padding: "10px 0", fontSize: "13px" }}>
+                      {new Date(b.started_at).toLocaleString()}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
