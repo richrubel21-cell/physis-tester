@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..database import SessionLocal, get_db
 from ..models import EcosystemBatch, EcosystemRun
@@ -41,34 +42,167 @@ class EcosystemBatchRequest(BaseModel):
 # Background runner
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _run_batch_background(batch_id: int, type_: str, app_count: int, scenarios: list[dict]) -> None:
-    """
-    Run every ecosystem scenario, writing per-scenario outcomes to
-    ecosystem_runs as they complete. Each scenario gets its own
-    EcosystemRun row. Final batch counters are rolled up at the end.
-    """
-    db: Session = SessionLocal()
+# ─── Short-lived session helpers ─────────────────────────────────────────────
+# Render's Postgres closes idle connections after a few minutes, which is
+# shorter than a single ecosystem scenario can take (plan + 3–7 /build
+# polls). Sharing one session across the whole batch was triggering
+# PendingRollbackError once the connection died mid-wait. Every DB op now
+# runs inside its own short-lived session via SessionLocal() → try/finally
+# (the same pattern get_db() uses internally), so a failed commit on one
+# scenario never poisons the rest of the batch.
+
+def _safe_rollback(db: Session) -> None:
+    """db.rollback() with defensive guard — rollback on a dead connection also raises."""
     try:
-        batch = db.query(EcosystemBatch).filter(EcosystemBatch.id == batch_id).first()
+        db.rollback()
+    except Exception as exc:
+        print(f"[ecosystem] rollback itself failed: {exc}")
+
+
+def _safe_commit(db: Session, context: str) -> bool:
+    """Commit; on any SQLAlchemy error rollback first and return False."""
+    try:
+        db.commit()
+        return True
+    except SQLAlchemyError as exc:
+        print(f"[ecosystem] commit failed ({context}): {exc}")
+        _safe_rollback(db)
+        return False
+
+
+def _flip_batch_status(batch_id: int, status: str) -> None:
+    """Set the batch's status column in a fresh short-lived session."""
+    db = SessionLocal()
+    try:
+        try:
+            batch = db.query(EcosystemBatch).filter(EcosystemBatch.id == batch_id).first()
+        except SQLAlchemyError as exc:
+            print(f"[ecosystem] flip status query failed (batch {batch_id}): {exc}")
+            _safe_rollback(db)
+            return
         if not batch:
             return
-        batch.status = "running"
-        db.commit()
+        batch.status = status
+        if status in ("completed", "failed"):
+            batch.completed_at = datetime.utcnow()
+        _safe_commit(db, f"flip batch {batch_id} -> {status}")
+    finally:
+        db.close()
 
-        for scenario in scenarios:
-            description = scenario["description"]
-            run = EcosystemRun(
-                batch_id              = batch_id,
-                business_description  = description,
-                app_count             = app_count,
-                type                  = type_,
-                status                = "running",
-                created_at            = datetime.utcnow(),
-            )
+
+def _create_run_row(batch_id: int, app_count: int, type_: str, description: str):
+    """Insert a pending EcosystemRun and return its id. None on DB failure."""
+    db = SessionLocal()
+    try:
+        run = EcosystemRun(
+            batch_id              = batch_id,
+            business_description  = description,
+            app_count             = app_count,
+            type                  = type_,
+            status                = "running",
+            created_at            = datetime.utcnow(),
+        )
+        try:
             db.add(run)
             db.commit()
             db.refresh(run)
-            run_id = run.id
+            return run.id
+        except SQLAlchemyError as exc:
+            print(f"[ecosystem] create run row failed (batch {batch_id}): {exc}")
+            _safe_rollback(db)
+            return None
+    finally:
+        db.close()
+
+
+def _finalize_run_row(run_id: int, result: dict) -> None:
+    """Write the simulator's result into the existing EcosystemRun row."""
+    db = SessionLocal()
+    try:
+        try:
+            run = db.query(EcosystemRun).filter(EcosystemRun.id == run_id).first()
+        except SQLAlchemyError as exc:
+            print(f"[ecosystem] finalize query failed (run {run_id}): {exc}")
+            _safe_rollback(db)
+            return
+        if run is None:
+            return
+        try:
+            run.status             = result["status"]
+            run.apps_planned       = result["apps_planned"]
+            run.apps_built         = result["apps_built"]
+            run.apps_deployed      = result["apps_deployed"]
+            run.apps_integrated    = result["apps_integrated"]
+            run.passed             = bool(result["passed"])
+            run.fail_reason        = result.get("fail_reason")
+            run.total_time_seconds = result.get("total_time_seconds")
+            run.app_urls           = json.dumps(result.get("app_urls")          or [])
+            run.apps_detail        = json.dumps(result.get("apps_detail")       or [])
+            run.apps_planned_json  = json.dumps(result.get("apps_planned_json") or [])
+            run.error_message      = result.get("error_message")
+            run.completed_at       = datetime.utcnow()
+        except SQLAlchemyError as exc:
+            print(f"[ecosystem] finalize write failed (run {run_id}): {exc}")
+            _safe_rollback(db)
+            return
+        _safe_commit(db, f"finalize run {run_id}")
+    finally:
+        db.close()
+
+
+def _rollup_batch(batch_id: int) -> None:
+    """Compute + persist final pass/fail counters for the batch."""
+    db = SessionLocal()
+    try:
+        try:
+            runs = db.query(EcosystemRun).filter(EcosystemRun.batch_id == batch_id).all()
+        except SQLAlchemyError as exc:
+            print(f"[ecosystem] rollup runs query failed (batch {batch_id}): {exc}")
+            _safe_rollback(db)
+            return
+
+        passed = sum(1 for r in runs if r.passed)
+        failed = sum(1 for r in runs if not r.passed)
+        build_times = [r.total_time_seconds for r in runs if r.total_time_seconds]
+
+        try:
+            batch = db.query(EcosystemBatch).filter(EcosystemBatch.id == batch_id).first()
+        except SQLAlchemyError as exc:
+            print(f"[ecosystem] rollup batch query failed (batch {batch_id}): {exc}")
+            _safe_rollback(db)
+            return
+        if not batch:
+            return
+
+        batch.pass_count     = passed
+        batch.fail_count     = failed
+        batch.pass_rate      = round((passed / len(runs) * 100), 1) if runs else 0.0
+        batch.avg_build_time = round(sum(build_times) / len(build_times), 2) if build_times else None
+        batch.status         = "completed"
+        batch.completed_at   = datetime.utcnow()
+        _safe_commit(db, f"rollup batch {batch_id}")
+    finally:
+        db.close()
+
+
+async def _run_batch_background(batch_id: int, type_: str, app_count: int, scenarios: list[dict]) -> None:
+    """
+    Run every ecosystem scenario, writing per-scenario outcomes to
+    ecosystem_runs as they complete. Each DB interaction uses a fresh
+    short-lived session (via the helpers above) so a dropped Postgres
+    connection during a long-running build never leaves the batch in a
+    PendingRollbackError state. Per-scenario DB work is isolated — a
+    failure on one scenario never poisons the rest of the batch.
+    """
+    try:
+        _flip_batch_status(batch_id, "running")
+
+        for scenario in scenarios:
+            description = scenario["description"]
+            run_id = _create_run_row(batch_id, app_count, type_, description)
+            if run_id is None:
+                # Couldn't persist the run shell — skip rather than crash the whole batch.
+                continue
 
             try:
                 result = await run_single_ecosystem(description, app_count, type_)
@@ -88,50 +222,12 @@ async def _run_batch_background(batch_id: int, type_: str, app_count: int, scena
                     "error_message":      str(exc),
                 }
 
-            # Reload run (session may have seen it evicted)
-            run = db.query(EcosystemRun).filter(EcosystemRun.id == run_id).first()
-            if run is None:
-                continue
+            _finalize_run_row(run_id, result)
 
-            run.status             = result["status"]
-            run.apps_planned       = result["apps_planned"]
-            run.apps_built         = result["apps_built"]
-            run.apps_deployed      = result["apps_deployed"]
-            run.apps_integrated    = result["apps_integrated"]
-            run.passed             = bool(result["passed"])
-            run.fail_reason        = result.get("fail_reason")
-            run.total_time_seconds = result.get("total_time_seconds")
-            run.app_urls           = json.dumps(result.get("app_urls")          or [])
-            run.apps_detail        = json.dumps(result.get("apps_detail")       or [])
-            run.apps_planned_json  = json.dumps(result.get("apps_planned_json") or [])
-            run.error_message      = result.get("error_message")
-            run.completed_at       = datetime.utcnow()
-            db.commit()
-
-        # Roll up final batch stats
-        runs = db.query(EcosystemRun).filter(EcosystemRun.batch_id == batch_id).all()
-        passed = sum(1 for r in runs if r.passed)
-        failed = sum(1 for r in runs if not r.passed)
-        build_times = [r.total_time_seconds for r in runs if r.total_time_seconds]
-
-        batch = db.query(EcosystemBatch).filter(EcosystemBatch.id == batch_id).first()
-        if batch:
-            batch.pass_count     = passed
-            batch.fail_count     = failed
-            batch.pass_rate      = round((passed / len(runs) * 100), 1) if runs else 0.0
-            batch.avg_build_time = round(sum(build_times) / len(build_times), 2) if build_times else None
-            batch.status         = "completed"
-            batch.completed_at   = datetime.utcnow()
-            db.commit()
+        _rollup_batch(batch_id)
     except Exception as exc:
         print(f"Ecosystem batch {batch_id} background task crashed: {exc}")
-        batch = db.query(EcosystemBatch).filter(EcosystemBatch.id == batch_id).first()
-        if batch:
-            batch.status = "failed"
-            batch.completed_at = datetime.utcnow()
-            db.commit()
-    finally:
-        db.close()
+        _flip_batch_status(batch_id, "failed")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
