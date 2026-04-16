@@ -150,8 +150,15 @@ def _finalize_run_row(run_id: int, result: dict) -> None:
         db.close()
 
 
-def _rollup_batch(batch_id: int) -> None:
-    """Compute + persist final pass/fail counters for the batch."""
+def _rollup_batch(batch_id: int) -> bool:
+    """
+    Compute + persist final pass/fail counters for the batch.
+
+    Returns True when the batch was successfully flipped to 'completed',
+    False on any DB failure path. On failure the batch status is flipped
+    to 'failed' via a fresh session inside this function, so the batch
+    never stays stuck in 'running' even if this rollup aborts mid-way.
+    """
     db = SessionLocal()
     try:
         try:
@@ -159,7 +166,8 @@ def _rollup_batch(batch_id: int) -> None:
         except SQLAlchemyError as exc:
             print(f"[ecosystem] rollup runs query failed (batch {batch_id}): {exc}")
             _safe_rollback(db)
-            return
+            _flip_batch_status(batch_id, "failed")
+            return False
 
         passed = sum(1 for r in runs if r.passed)
         failed = sum(1 for r in runs if not r.passed)
@@ -170,9 +178,11 @@ def _rollup_batch(batch_id: int) -> None:
         except SQLAlchemyError as exc:
             print(f"[ecosystem] rollup batch query failed (batch {batch_id}): {exc}")
             _safe_rollback(db)
-            return
+            _flip_batch_status(batch_id, "failed")
+            return False
         if not batch:
-            return
+            # Batch row was deleted externally. Nothing to flip.
+            return False
 
         batch.pass_count     = passed
         batch.fail_count     = failed
@@ -180,7 +190,13 @@ def _rollup_batch(batch_id: int) -> None:
         batch.avg_build_time = round(sum(build_times) / len(build_times), 2) if build_times else None
         batch.status         = "completed"
         batch.completed_at   = datetime.utcnow()
-        _safe_commit(db, f"rollup batch {batch_id}")
+        if not _safe_commit(db, f"rollup batch {batch_id}"):
+            # Commit rolled back — the status update never landed. Force
+            # the batch to 'failed' via a fresh session so the UI stops
+            # showing it as perpetually running.
+            _flip_batch_status(batch_id, "failed")
+            return False
+        return True
     finally:
         db.close()
 
@@ -224,7 +240,11 @@ async def _run_batch_background(batch_id: int, type_: str, app_count: int, scena
 
             _finalize_run_row(run_id, result)
 
-        _rollup_batch(batch_id)
+        # Belt-and-suspenders: _rollup_batch flips to 'failed' on its own
+        # early-return paths, but this guarantees the batch always reaches
+        # a terminal status even if the flip inside rollup itself fails.
+        if not _rollup_batch(batch_id):
+            _flip_batch_status(batch_id, "failed")
     except Exception as exc:
         print(f"Ecosystem batch {batch_id} background task crashed: {exc}")
         _flip_batch_status(batch_id, "failed")

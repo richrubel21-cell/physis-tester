@@ -63,7 +63,12 @@ from .simulator import (
 PLAN_TIMEOUT_SECONDS   = 90     # /api/ecosystem-builder/plan uses Haiku — slow-ish
 BUILD_POST_TIMEOUT     = 30     # POST /build should come back quick
 STATUS_POLL_INTERVAL   = 5      # seconds between /status polls
-STATUS_POLL_TIMEOUT    = 600    # 10 min per app — Physis may queue
+# 20 min per app: Physis's QUEUE_TIMEOUT_SECONDS is 10 min, and a real
+# build takes another 1–3 min once it clears the queue. In 7-app Full
+# mode with MAX_CONCURRENT_BUILDS=2 the last-queued app can easily sit
+# for 10+ min before it runs. 600s was producing false-negative "poll
+# timed out" failures for builds that actually succeeded on Physis.
+STATUS_POLL_TIMEOUT    = 1200   # 20 min per app
 ECOSYSTEM_TOTAL_BUDGET = 3600   # 60 min overall budget per ecosystem run
 
 
