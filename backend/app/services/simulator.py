@@ -1,10 +1,16 @@
 import httpx
 import json
+import random
 import time
 
 PHYSIS_BASE_URL = "https://physis.onrender.com"
 BUILD_TIMEOUT = 30
 STREAM_TIMEOUT = 120
+
+# Complexity is picked at call time per build so a single batch exercises
+# Physis's simple / medium / advanced code paths. Matches the Physis
+# BuildRequest contract and the complexity values scenario_generator uses.
+COMPLEXITY_OPTIONS = ["simple", "medium", "advanced"]
 
 BASE_PAYLOAD = {
     # Required BuildRequest fields — still sent as defaults because the
@@ -20,7 +26,6 @@ BASE_PAYLOAD = {
     "usageFrequency": "daily",
     "toneStyle": "friendly",
     "themeColor": "blue",
-    "complexity": "simple",
     "successMeasure": "user can complete the main task easily",
     "selectedName": "",
     "selectedTagline": "",
@@ -61,7 +66,11 @@ async def run_single(description: str) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=BUILD_TIMEOUT) as client:
-            payload = {**BASE_PAYLOAD, "userInput": description}
+            payload = {
+                **BASE_PAYLOAD,
+                "userInput":  description,
+                "complexity": random.choice(COMPLEXITY_OPTIONS),
+            }
             response = await client.post(
                 f"{PHYSIS_BASE_URL}/build",
                 json=payload,
