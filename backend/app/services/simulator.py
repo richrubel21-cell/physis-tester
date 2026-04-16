@@ -7,8 +7,12 @@ BUILD_TIMEOUT = 30
 STREAM_TIMEOUT = 120
 
 BASE_PAYLOAD = {
+    # Required BuildRequest fields — still sent as defaults because the
+    # Pydantic model on the Physis side validates min_length >= 1. The
+    # questionnaire's new auto-inference steps don't ask the user for
+    # these anymore, but the API contract still requires them.
     "generates": "web app",
-    "targetUser": "general user",
+    "targetUser": "General users",
     "outputFormat": "web application",
     "outputLength": "full",
     "specialRules": "none",
@@ -16,11 +20,32 @@ BASE_PAYLOAD = {
     "usageFrequency": "daily",
     "toneStyle": "friendly",
     "themeColor": "blue",
-    "complexity": "medium",
+    "complexity": "simple",
     "successMeasure": "user can complete the main task easily",
     "selectedName": "",
     "selectedTagline": "",
     "selectedSubdomain": "",
+
+    # New questionnaire-flow fields introduced in the Patent #18–#20 sweep.
+    #
+    # preferred_name — Mary's opening question: "What would you like me to
+    #   call you?". Sent under both the plain key (as spec'd) and
+    #   user_preferred_name (the canonical BuildRequest field name) so the
+    #   answer survives Pydantic validation either way.
+    # io_skipped / input_fields / output_fields — skip the visual IO Builder
+    #   step and let Physis infer fields from the description.
+    # teach_ai_skipped / teach_ai_summary — always skip the Teach Your AI
+    #   upload step; simulated runs carry no personal context.
+    # join_ecosystem — always decline the ecosystem opt-in (only asked to
+    #   returning builders with 2+ apps; simulator is always a first build).
+    "preferred_name":      "Tester",
+    "user_preferred_name": "Tester",
+    "io_skipped":          True,
+    "input_fields":        [],
+    "output_fields":       [],
+    "teach_ai_skipped":    True,
+    "teach_ai_summary":    "",
+    "join_ecosystem":      False,
 }
 
 async def run_single(description: str) -> dict:
