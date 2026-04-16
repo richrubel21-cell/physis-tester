@@ -91,3 +91,49 @@ class MaryRun(Base):
     started_at             = Column(DateTime, default=datetime.utcnow)
     finished_at            = Column(DateTime, nullable=True)
     batch                  = relationship("MaryBatch", back_populates="runs")
+
+
+# ---------------------------------------------------------------------------
+# Ecosystem Tester tables
+# ---------------------------------------------------------------------------
+
+class EcosystemBatch(Base):
+    __tablename__ = "ecosystem_batches"
+    id              = Column(Integer, primary_key=True, index=True)
+    type            = Column(String, nullable=False)            # "full" | "sequential"
+    status          = Column(String, default="pending")         # pending, running, completed, failed
+    scenario_count  = Column(Integer, default=0)
+    app_count       = Column(Integer, default=3)                # 3 or 7 — batch-wide
+    pass_count      = Column(Integer, default=0)
+    fail_count      = Column(Integer, default=0)
+    pass_rate       = Column(Float, default=0.0)
+    avg_build_time  = Column(Float, nullable=True)
+    started_at      = Column(DateTime, default=datetime.utcnow)
+    completed_at    = Column(DateTime, nullable=True)
+    runs            = relationship("EcosystemRun", back_populates="batch")
+
+
+class EcosystemRun(Base):
+    __tablename__ = "ecosystem_runs"
+    id                    = Column(Integer, primary_key=True, index=True)
+    batch_id              = Column(Integer, ForeignKey("ecosystem_batches.id"), nullable=False)
+    business_description  = Column(Text, nullable=False)
+    app_count             = Column(Integer, default=3)           # 3 or 7
+    type                  = Column(String, nullable=False)       # "full" | "sequential"
+    status                = Column(String, default="pending")    # pending, running, passed, failed, error
+    apps_planned          = Column(Integer, default=0)
+    apps_built            = Column(Integer, default=0)
+    apps_deployed         = Column(Integer, default=0)
+    apps_integrated       = Column(Integer, default=0)
+    # "passed" not "pass" — pass is a Python keyword AND reserved in several
+    # SQL dialects. Keeping it as a plain boolean flag.
+    passed                = Column(Boolean, default=False)
+    fail_reason           = Column(Text, nullable=True)
+    total_time_seconds    = Column(Float, nullable=True)
+    app_urls              = Column(Text, nullable=True)          # JSON array string
+    apps_detail           = Column(Text, nullable=True)          # JSON array of per-app dicts
+    apps_planned_json     = Column(Text, nullable=True)          # Raw plan returned by /api/ecosystem-builder/plan
+    error_message         = Column(Text, nullable=True)
+    created_at            = Column(DateTime, default=datetime.utcnow)
+    completed_at          = Column(DateTime, nullable=True)
+    batch                 = relationship("EcosystemBatch", back_populates="runs")

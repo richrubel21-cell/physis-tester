@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
 from .routes import scenarios, simulator, runs, analytics, orchestrator, products
 from .routes.mary import router as mary_router
+from .routes.ecosystem import router as ecosystem_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -31,6 +32,7 @@ app.include_router(analytics.router)
 app.include_router(orchestrator.router)
 app.include_router(products.router)
 app.include_router(mary_router)
+app.include_router(ecosystem_router)
 
 @app.get("/health")
 def health():

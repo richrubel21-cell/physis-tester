@@ -34,4 +34,14 @@ export const api = {
     client.get(`/mary/batch/${batchId}`).then(r => r.data),
   listMaryBatches: () =>
     client.get("/mary/").then(r => r.data),
+
+  // Ecosystem testing vertical
+  startEcosystemBatch: (scenario_count = 5, app_count = 3, type = "full") =>
+    client.post("/ecosystem/batch", { scenario_count, app_count, type }).then(r => r.data),
+  getEcosystemBatch: (batchId) =>
+    client.get(`/ecosystem/batch/${batchId}`).then(r => r.data),
+  listEcosystemBatches: () =>
+    client.get("/ecosystem/batches").then(r => r.data),
+  getEcosystemAnalytics: () =>
+    client.get("/ecosystem/analytics").then(r => r.data),
 };

@@ -2,6 +2,7 @@ import { useState } from "react";
 import Dashboard from "./pages/Dashboard";
 import BatchMonitor from "./pages/BatchMonitor";
 import MaryMonitor from "./pages/MaryMonitor";
+import EcosystemMonitor from "./pages/EcosystemMonitor";
 import Failures from "./pages/Failures";
 
 const globalStyle = `
@@ -11,9 +12,10 @@ const globalStyle = `
 `;
 
 export default function App() {
-  const [page,           setPage]          = useState("dashboard");
-  const [activeBatchId,  setActiveBatchId] = useState(null);
-  const [activeMaryId,   setActiveMaryId]  = useState(null);
+  const [page,               setPage]              = useState("dashboard");
+  const [activeBatchId,      setActiveBatchId]     = useState(null);
+  const [activeMaryId,       setActiveMaryId]      = useState(null);
+  const [activeEcosystemId,  setActiveEcosystemId] = useState(null);
 
   function handleStartBatch(batchId) {
     setActiveBatchId(batchId);
@@ -29,6 +31,12 @@ export default function App() {
   function handleViewMaryBatch(batchId) {
     setActiveMaryId(batchId);
     setPage("mary");
+  }
+
+  // Ecosystem batches — mirror the Mary flow
+  function handleViewEcosystemBatch(batchId) {
+    setActiveEcosystemId(batchId);
+    setPage("ecosystem");
   }
 
   return (
@@ -65,6 +73,7 @@ export default function App() {
           onStartBatch={handleStartBatch}
           onViewBatch={handleViewBatch}
           onViewMaryBatch={handleViewMaryBatch}
+          onViewEcosystemBatch={handleViewEcosystemBatch}
         />
       )}
       {page === "batch" && activeBatchId && (
@@ -72,6 +81,9 @@ export default function App() {
       )}
       {page === "mary" && activeMaryId && (
         <MaryMonitor batchId={activeMaryId} onBack={() => setPage("dashboard")} />
+      )}
+      {page === "ecosystem" && activeEcosystemId && (
+        <EcosystemMonitor batchId={activeEcosystemId} onBack={() => setPage("dashboard")} />
       )}
       {page === "failures" && (
         <Failures onBack={() => setPage("dashboard")} />
