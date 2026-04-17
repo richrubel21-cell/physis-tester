@@ -441,3 +441,295 @@ async def run_single_ecosystem(description: str, app_count: int, mode: str) -> d
     if mode == "sequential":
         return await run_sequential_ecosystem(description, app_count)
     return await run_full_ecosystem(description, app_count)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Integration tests (22–29) — run AFTER every app in an ecosystem has deployed.
+# Verify the ecosystem holds together as a connected whole, not just that each
+# individual app works in isolation. Marketplace eligibility requires all 8.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import re
+from urllib.parse import urlparse
+
+INTEGRATION_FETCH_TIMEOUT = 15
+
+
+def _test_result(test_id: int, name: str, passed: bool, detail: str) -> dict:
+    return {
+        "test_id": test_id,
+        "name":    name,
+        "passed":  bool(passed),
+        "score":   1 if passed else 0,
+        "detail":  detail[:400] if detail else "",
+    }
+
+
+async def _fetch_html(url: str) -> tuple[int, str]:
+    """GET url and return (status_code, body_text). Returns (0, "") on network error."""
+    try:
+        async with httpx.AsyncClient(timeout=INTEGRATION_FETCH_TIMEOUT, follow_redirects=True) as client:
+            r = await client.get(url)
+            return r.status_code, r.text or ""
+    except Exception:
+        return 0, ""
+
+
+def _extract_subdomain(url: str) -> str:
+    """'https://foo.myphysis.ai' → 'foo'. Empty string if we can't parse it."""
+    try:
+        host = urlparse(url).hostname or ""
+        return host.split(".", 1)[0] if host else ""
+    except Exception:
+        return ""
+
+
+def _extract_primary_color(html: str) -> str:
+    """
+    Best-effort sniff for the primary accent color in order:
+      1. --primary: #xxxxxx  (CSS variable)
+      2. first #rrggbb in inline style or CSS
+    Returns lower-cased hex or "" if nothing found.
+    """
+    m = re.search(r"--primary\s*:\s*(#[0-9a-fA-F]{3,8})", html)
+    if m:
+        return m.group(1).lower()
+    m = re.search(r"#[0-9a-fA-F]{6}", html)
+    return m.group(0).lower() if m else ""
+
+
+def _extract_ecosystem_name(html: str) -> str:
+    """
+    The Physis ecosystem nav renders the workspace title inside a data attribute
+    or visible header. Heuristic: find data-ecosystem-name="..." or a nav
+    element's first text node. Returns "" if we cannot detect one.
+    """
+    m = re.search(r'data-ecosystem(?:[-_]name)?\s*=\s*["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'<nav[^>]*>.*?<(?:span|div|h[1-6])[^>]*>([^<]{2,60})</', html, re.IGNORECASE | re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_nav_hrefs(html: str) -> list[str]:
+    """All href targets that appear inside a <nav>…</nav> block."""
+    navs = re.findall(r"<nav\b.*?</nav>", html, re.IGNORECASE | re.DOTALL)
+    hrefs: list[str] = []
+    for n in navs:
+        hrefs.extend(re.findall(r'href\s*=\s*["\']([^"\']+)["\']', n, re.IGNORECASE))
+    return hrefs
+
+
+async def _test_shared_nav_present(apps: list[dict], htmls: dict[str, str]) -> dict:
+    missing: list[str] = []
+    for a in apps:
+        html = htmls.get(a["live_url"], "") or ""
+        if "<nav" not in html.lower():
+            missing.append(a.get("name") or a["live_url"])
+            continue
+        # Need at least one sibling subdomain mentioned inside the nav
+        sibs = [s for s in (_extract_subdomain(b["live_url"]) for b in apps if b is not a) if s]
+        navs_block = " ".join(re.findall(r"<nav\b.*?</nav>", html, re.IGNORECASE | re.DOTALL))
+        if not any(s in navs_block for s in sibs):
+            missing.append(a.get("name") or a["live_url"])
+    passed = not missing
+    detail = "Nav with sibling links found on every app" if passed else f"Missing ecosystem nav on: {', '.join(missing)}"
+    return _test_result(22, "Shared Nav Present", passed, detail)
+
+
+async def _test_nav_links_correct(apps: list[dict], htmls: dict[str, str]) -> dict:
+    broken: list[str] = []
+    for a in apps:
+        html = htmls.get(a["live_url"], "") or ""
+        hrefs = _extract_nav_hrefs(html)
+        sibling_subs = {_extract_subdomain(b["live_url"]) for b in apps if b is not a and b.get("live_url")}
+        sibling_subs.discard("")
+
+        present: set[str] = set()
+        for h in hrefs:
+            for s in sibling_subs:
+                if s and s in h:
+                    present.add(s)
+        missing = sibling_subs - present
+        if missing:
+            broken.append(f"{a.get('name')}: missing links for {', '.join(sorted(missing))}")
+            continue
+
+        # Verify each sibling link resolves (HEAD-equivalent via GET, already cached)
+        for s in sibling_subs:
+            sib = next((b for b in apps if _extract_subdomain(b.get("live_url") or "") == s), None)
+            if not sib:
+                continue
+            status_code, _ = await _fetch_html(sib["live_url"])
+            if status_code == 0 or status_code >= 400:
+                broken.append(f"{a.get('name')} → {s}: HTTP {status_code}")
+
+    passed = not broken
+    detail = "Every nav link resolves with a 2xx/3xx" if passed else "; ".join(broken[:5])
+    return _test_result(23, "Nav Links Correct", passed, detail)
+
+
+async def _test_theme_consistency(apps: list[dict], htmls: dict[str, str]) -> dict:
+    colors: dict[str, str] = {}
+    for a in apps:
+        c = _extract_primary_color(htmls.get(a["live_url"], "") or "")
+        colors[a.get("name") or a["live_url"]] = c
+    distinct = {c for c in colors.values() if c}
+    if not distinct:
+        return _test_result(24, "Theme Consistency", False, "No primary color detected on any app")
+    passed = len(distinct) == 1
+    detail = f"All apps share {next(iter(distinct))}" if passed else f"Colors differ across apps: {colors}"
+    return _test_result(24, "Theme Consistency", passed, detail)
+
+
+async def _test_ecosystem_name_consistent(apps: list[dict], htmls: dict[str, str]) -> dict:
+    names: dict[str, str] = {}
+    for a in apps:
+        names[a.get("name") or a["live_url"]] = _extract_ecosystem_name(htmls.get(a["live_url"], "") or "")
+    non_empty = [v for v in names.values() if v]
+    if len(non_empty) != len(apps):
+        missing = [k for k, v in names.items() if not v]
+        return _test_result(25, "Ecosystem Name Consistent", False, f"Name missing on: {', '.join(missing)}")
+    distinct = set(non_empty)
+    passed = len(distinct) == 1
+    detail = f"Ecosystem name '{next(iter(distinct))}' consistent across apps" if passed else f"Name differs across apps: {names}"
+    return _test_result(25, "Ecosystem Name Consistent", passed, detail)
+
+
+async def _test_cross_app_navigation(apps: list[dict]) -> dict:
+    """Fetch app 1 → app 2 → app 3 → back to 1. Every hop must be 2xx/3xx."""
+    if len(apps) < 2:
+        return _test_result(26, "Cross-App Navigation", True, "Single-app ecosystem, trivially passes")
+    hops = apps + [apps[0]]
+    failures: list[str] = []
+    for a in hops:
+        status_code, _ = await _fetch_html(a["live_url"])
+        if status_code == 0 or status_code >= 400:
+            failures.append(f"{a.get('name')} (HTTP {status_code})")
+    passed = not failures
+    detail = f"Round trip across {len(hops)} hops succeeded" if passed else f"Hop failures: {', '.join(failures)}"
+    return _test_result(26, "Cross-App Navigation", passed, detail)
+
+
+async def _test_shared_data_layer(apps: list[dict]) -> dict:
+    """
+    Lightweight proxy for 'every app has a row in ecosystem_apps with matching
+    ecosystem_id'. The Physis tester runs with anonymous UUIDs and has no
+    Supabase read access here, so we assert the invariants we CAN see:
+      - every deployed app carries a subdomain (→ implies a user_apps row)
+      - all subdomains are distinct (→ implies unique app_id)
+    This is the strongest check we can make without leaking an admin key into
+    the tester. If a real Supabase read is added later, replace this with
+    an RPC that validates ecosystem_apps directly.
+    """
+    subs = [_extract_subdomain(a.get("live_url") or "") for a in apps]
+    missing = [a.get("name") for a, s in zip(apps, subs) if not s]
+    if missing:
+        return _test_result(27, "Shared Data Layer", False, f"Apps without a subdomain: {', '.join(missing)}")
+    if len(set(subs)) != len(subs):
+        return _test_result(27, "Shared Data Layer", False, f"Duplicate subdomains detected: {subs}")
+    return _test_result(27, "Shared Data Layer", True, f"All {len(apps)} apps have unique subdomains")
+
+
+async def _test_ai_engine_present(apps: list[dict], htmls: dict[str, str]) -> dict:
+    missing: list[str] = []
+    for a in apps:
+        body = (htmls.get(a["live_url"], "") or "").lower()
+        if not any(token in body for token in ("useai", "/api/ai", "ai_engine", "ai-engine")):
+            missing.append(a.get("name") or a["live_url"])
+    passed = not missing
+    detail = "AI hook indicator found on every app" if passed else f"AI hook missing on: {', '.join(missing)}"
+    return _test_result(28, "AI Engine Present", passed, detail)
+
+
+async def _test_powered_by_physis(apps: list[dict], htmls: dict[str, str]) -> dict:
+    missing: list[str] = []
+    for a in apps:
+        body = (htmls.get(a["live_url"], "") or "").lower()
+        if "powered by physis" not in body and "powered-by-physis" not in body:
+            missing.append(a.get("name") or a["live_url"])
+    passed = not missing
+    detail = "'Powered by Physis' present on every app" if passed else f"Missing badge on: {', '.join(missing)}"
+    return _test_result(29, "Powered by Physis Present", passed, detail)
+
+
+async def run_integration_tests(ecosystem_apps: list[dict]) -> dict:
+    """
+    Run the 8 ecosystem integration tests (22–29) against the set of apps that
+    were all successfully deployed for this ecosystem.
+
+    Parameters
+    ----------
+    ecosystem_apps : list[dict]
+        Apps from an EcosystemRun.apps_detail. Each must have a 'live_url' —
+        apps without one are filtered out and the whole run is marked failed.
+
+    Returns
+    -------
+    {
+        "integration_tests":   list of per-test dicts (22..29),
+        "integration_score":   int (0..8),
+        "integration_passed":  bool (score == 8),
+        "integration_details": str (short human summary),
+    }
+
+    If any individual app failed to deploy, integration tests are skipped and
+    a synthetic failing result is returned so the ecosystem is marked failed.
+    """
+    deployed = [a for a in ecosystem_apps if a.get("live_url")]
+    if len(deployed) != len(ecosystem_apps) or not deployed:
+        missing = [a.get("name") or "(unnamed)" for a in ecosystem_apps if not a.get("live_url")]
+        skipped = [
+            _test_result(tid, name, False, f"Skipped — apps failed to deploy: {', '.join(missing)[:200]}")
+            for tid, name in [
+                (22, "Shared Nav Present"),
+                (23, "Nav Links Correct"),
+                (24, "Theme Consistency"),
+                (25, "Ecosystem Name Consistent"),
+                (26, "Cross-App Navigation"),
+                (27, "Shared Data Layer"),
+                (28, "AI Engine Present"),
+                (29, "Powered by Physis Present"),
+            ]
+        ]
+        return {
+            "integration_tests":   skipped,
+            "integration_score":   0,
+            "integration_passed":  False,
+            "integration_details": f"Integration tests skipped: {len(missing)} app(s) failed to deploy",
+        }
+
+    # Fetch every app's HTML once, reuse across tests that only need GET bodies.
+    fetched = await asyncio.gather(
+        *[_fetch_html(a["live_url"]) for a in deployed],
+        return_exceptions=False,
+    )
+    htmls: dict[str, str] = {}
+    for a, (status_code, body) in zip(deployed, fetched):
+        htmls[a["live_url"]] = body if status_code and status_code < 400 else ""
+
+    tests = [
+        await _test_shared_nav_present(deployed, htmls),
+        await _test_nav_links_correct(deployed, htmls),
+        await _test_theme_consistency(deployed, htmls),
+        await _test_ecosystem_name_consistent(deployed, htmls),
+        await _test_cross_app_navigation(deployed),
+        await _test_shared_data_layer(deployed),
+        await _test_ai_engine_present(deployed, htmls),
+        await _test_powered_by_physis(deployed, htmls),
+    ]
+
+    score = sum(t["score"] for t in tests)
+    passed = score == 8
+    details = (
+        f"All 8 integration tests passed"
+        if passed
+        else f"{8 - score} integration test(s) failed: "
+             + ", ".join(t["name"] for t in tests if not t["passed"])
+    )
+    return {
+        "integration_tests":   tests,
+        "integration_score":   score,
+        "integration_passed":  passed,
+        "integration_details": details,
+    }

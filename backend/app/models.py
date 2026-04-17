@@ -99,18 +99,19 @@ class MaryRun(Base):
 
 class EcosystemBatch(Base):
     __tablename__ = "ecosystem_batches"
-    id              = Column(Integer, primary_key=True, index=True)
-    type            = Column(String, nullable=False)            # "full" | "sequential"
-    status          = Column(String, default="pending")         # pending, running, completed, failed
-    scenario_count  = Column(Integer, default=0)
-    app_count       = Column(Integer, default=3)                # 3 or 7 — batch-wide
-    pass_count      = Column(Integer, default=0)
-    fail_count      = Column(Integer, default=0)
-    pass_rate       = Column(Float, default=0.0)
-    avg_build_time  = Column(Float, nullable=True)
-    started_at      = Column(DateTime, default=datetime.utcnow)
-    completed_at    = Column(DateTime, nullable=True)
-    runs            = relationship("EcosystemRun", back_populates="batch")
+    id                   = Column(Integer, primary_key=True, index=True)
+    type                 = Column(String, nullable=False)            # "full" | "sequential"
+    status               = Column(String, default="pending")         # pending, running, completed, failed
+    scenario_count       = Column(Integer, default=0)
+    app_count            = Column(Integer, default=3)                # 3 or 7 — batch-wide
+    pass_count           = Column(Integer, default=0)
+    fail_count           = Column(Integer, default=0)
+    pass_rate            = Column(Float, default=0.0)
+    avg_build_time       = Column(Float, nullable=True)
+    started_at           = Column(DateTime, default=datetime.utcnow)
+    completed_at         = Column(DateTime, nullable=True)
+    marketplace_eligible = Column(Boolean, default=False)
+    runs                 = relationship("EcosystemRun", back_populates="batch")
 
 
 class EcosystemRun(Base):
@@ -134,6 +135,15 @@ class EcosystemRun(Base):
     apps_detail           = Column(Text, nullable=True)          # JSON array of per-app dicts
     apps_planned_json     = Column(Text, nullable=True)          # Raw plan returned by /api/ecosystem-builder/plan
     error_message         = Column(Text, nullable=True)
+    # Integration test results — 8 tests (22–29) that run AFTER every app has
+    # deployed. Stored as an array of {test_id, name, passed, score, detail}
+    # dicts in integration_results, with the 0–8 roll-up in integration_score.
+    integration_score     = Column(Integer, default=0)
+    integration_passed    = Column(Boolean, default=False)
+    integration_results   = Column(Text, nullable=True)           # JSON array of per-test dicts
+    integration_details   = Column(Text, nullable=True)           # Short human summary
+    # Only true when every app passed its individual tests AND integration_score == 8
+    marketplace_eligible  = Column(Boolean, default=False)
     created_at            = Column(DateTime, default=datetime.utcnow)
     completed_at          = Column(DateTime, nullable=True)
     batch                 = relationship("EcosystemBatch", back_populates="runs")

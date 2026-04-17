@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/services";
 import { usePoll } from "../hooks/usePoll";
+import EcosystemApproveModal from "../EcosystemApproveModal";
 
 const statusColor = {
   passed:  "#a6e3a1",
@@ -33,6 +34,7 @@ export default function EcosystemMonitor({ batchId, onBack }) {
   const [loading, setLoading]       = useState(true);
   const [hasFetched, setHasFetched] = useState(false);
   const [expanded, setExpanded]     = useState({});   // run_id -> bool
+  const [approveRun, setApproveRun] = useState(null); // run object when modal open
 
   // Stop polling on any terminal batch state — same pattern as BatchMonitor
   const isRunning = batch
@@ -105,7 +107,12 @@ export default function EcosystemMonitor({ batchId, onBack }) {
         <span style={{ background: batch.type === "full" ? "#2a4a3f" : "#4a3f2a", color: batch.type === "full" ? "#94e2d5" : "#f9e2af", borderRadius: "6px", padding: "2px 10px", fontSize: "11px", fontWeight: "600", marginRight: "10px" }}>
           {batch.type}
         </span>
-        {batch.app_count} apps per scenario · {total} scenarios total
+        {batch.app_count} apps per scenario · {total} scenarios total · 29 tests per app + 8 integration tests
+        {batch.marketplace_eligible && (
+          <span style={{ marginLeft: "10px", background: "#1e3a2e", color: "#a6e3a1", borderRadius: "6px", padding: "2px 10px", fontSize: "11px", fontWeight: "700" }}>
+            ✓ Marketplace Eligible
+          </span>
+        )}
       </div>
 
       {/* Progress bar */}
@@ -281,6 +288,67 @@ export default function EcosystemMonitor({ batchId, onBack }) {
                         </span>
                       </div>
 
+                      {/* Integration tests (22–29) */}
+                      {(run.apps_planned > 0) && (
+                        <div style={{ marginTop: "18px", background: "#11111b", border: "1px solid #313244", borderRadius: "10px", padding: "14px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                            <div style={{ color: "#cdd6f4", fontSize: "13px", fontWeight: "700" }}>🔗 Integration Tests</div>
+                            <span style={{
+                              background:   run.integration_passed ? "#1e3a2e" : "#3a1e1e",
+                              color:        run.integration_passed ? "#a6e3a1" : "#f38ba8",
+                              borderRadius: "6px",
+                              padding:      "2px 10px",
+                              fontSize:     "11px",
+                              fontWeight:   "700",
+                            }}>
+                              {run.integration_passed ? `INTEGRATION PASSED ${run.integration_score}/8` : `INTEGRATION FAILED ${run.integration_score ?? 0}/8`}
+                            </span>
+                          </div>
+                          {/* Progress bar */}
+                          <div style={{ background: "#181825", borderRadius: "6px", height: "6px", marginBottom: "10px", overflow: "hidden" }}>
+                            <div style={{
+                              background: run.integration_passed ? "#a6e3a1" : "#f9e2af",
+                              width:      `${((run.integration_score ?? 0) / 8) * 100}%`,
+                              height:     "100%",
+                              transition: "width 0.5s ease",
+                            }} />
+                          </div>
+                          {(run.integration_tests || []).length === 0 ? (
+                            <div style={{ color: "#6c7086", fontSize: "12px" }}>
+                              {run.integration_details || "Integration tests not yet run for this ecosystem."}
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                              {run.integration_tests.map(t => (
+                                <div key={t.test_id} style={{ fontSize: "12px", lineHeight: 1.5, color: t.passed ? "#a6e3a1" : "#f38ba8" }}>
+                                  <span style={{ fontFamily: "monospace", marginRight: "6px" }}>{t.passed ? "✅" : "❌"}</span>
+                                  <span style={{ color: "#cdd6f4", fontWeight: "600" }}>#{t.test_id} {t.name}</span>
+                                  {!t.passed && t.detail && (
+                                    <div style={{ color: "#f38ba8", fontSize: "11px", marginLeft: "24px", marginTop: "2px" }}>
+                                      {t.detail}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {run.marketplace_eligible && (
+                            <div style={{ marginTop: "14px", display: "flex", alignItems: "center", gap: "10px" }}>
+                              <span style={{ background: "#1e3a2e", color: "#a6e3a1", borderRadius: "6px", padding: "3px 10px", fontSize: "11px", fontWeight: "700" }}>
+                                ✓ Marketplace Eligible
+                              </span>
+                              <button
+                                type="button"
+                                onClick={e => { e.stopPropagation(); setApproveRun(run); }}
+                                style={{ background: "#7c3aed", color: "white", border: "none", borderRadius: "8px", padding: "7px 14px", fontSize: "12px", fontWeight: "700", cursor: "pointer" }}
+                              >
+                                ✓ Approve Ecosystem for Marketplace
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {run.error_message && (
                         <div style={{ marginTop: "10px", fontSize: "12px", color: "#f38ba8" }}>
                           Error: {run.error_message}
@@ -294,6 +362,13 @@ export default function EcosystemMonitor({ batchId, onBack }) {
           </div>
         )}
       </div>
+
+      {approveRun && (
+        <EcosystemApproveModal
+          run={approveRun}
+          onClose={() => setApproveRun(null)}
+        />
+      )}
     </div>
   );
 }

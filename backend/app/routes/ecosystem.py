@@ -23,7 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from ..database import SessionLocal, get_db
 from ..models import EcosystemBatch, EcosystemRun
 from ..services.ecosystem_scenarios import get_ecosystem_scenarios, pool_size
-from ..services.ecosystem_simulator import run_single_ecosystem
+from ..services.ecosystem_simulator import run_single_ecosystem, run_integration_tests
 
 router = APIRouter(prefix="/ecosystem", tags=["ecosystem"])
 
@@ -140,6 +140,20 @@ def _finalize_run_row(run_id: int, result: dict) -> None:
             run.apps_detail        = json.dumps(result.get("apps_detail")       or [])
             run.apps_planned_json  = json.dumps(result.get("apps_planned_json") or [])
             run.error_message      = result.get("error_message")
+
+            # Integration test results — new fields. Present only after run_integration_tests
+            # has been called on a run whose apps all deployed. Otherwise stays at defaults.
+            run.integration_score    = int(result.get("integration_score")   or 0)
+            run.integration_passed   = bool(result.get("integration_passed") or False)
+            run.integration_results  = json.dumps(result.get("integration_tests")   or [])
+            run.integration_details  = (result.get("integration_details") or "")[:500] or None
+
+            # Marketplace eligibility — the ecosystem only becomes marketplace-eligible
+            # when every individual app deployed AND all 8 integration tests passed.
+            run.marketplace_eligible = bool(
+                result.get("passed") and result.get("integration_passed")
+            )
+
             run.completed_at       = datetime.utcnow()
         except SQLAlchemyError as exc:
             print(f"[ecosystem] finalize write failed (run {run_id}): {exc}")
@@ -184,12 +198,16 @@ def _rollup_batch(batch_id: int) -> bool:
             # Batch row was deleted externally. Nothing to flip.
             return False
 
-        batch.pass_count     = passed
-        batch.fail_count     = failed
-        batch.pass_rate      = round((passed / len(runs) * 100), 1) if runs else 0.0
-        batch.avg_build_time = round(sum(build_times) / len(build_times), 2) if build_times else None
-        batch.status         = "completed"
-        batch.completed_at   = datetime.utcnow()
+        batch.pass_count           = passed
+        batch.fail_count           = failed
+        batch.pass_rate            = round((passed / len(runs) * 100), 1) if runs else 0.0
+        batch.avg_build_time       = round(sum(build_times) / len(build_times), 2) if build_times else None
+        # A batch is marketplace-eligible when at least one run inside it is
+        # marketplace-eligible. The UI uses this flag to gate the "Approve
+        # Ecosystem for Marketplace" button on the batch summary.
+        batch.marketplace_eligible = any(getattr(r, "marketplace_eligible", False) for r in runs)
+        batch.status               = "completed"
+        batch.completed_at         = datetime.utcnow()
         if not _safe_commit(db, f"rollup batch {batch_id}"):
             # Commit rolled back — the status update never landed. Force
             # the batch to 'failed' via a fresh session so the UI stops
@@ -237,6 +255,29 @@ async def _run_batch_background(batch_id: int, type_: str, app_count: int, scena
                     "apps_planned_json":  [],
                     "error_message":      str(exc),
                 }
+
+            # NEW FLOW — after every app in this ecosystem has attempted its build,
+            # run the 8 integration tests. If any individual app failed, the test
+            # runner short-circuits and records synthetic failures so the
+            # ecosystem is cleanly marked failed without hammering dead URLs.
+            try:
+                integration = await run_integration_tests(result.get("apps_detail") or [])
+            except Exception as exc:
+                integration = {
+                    "integration_tests":   [],
+                    "integration_score":   0,
+                    "integration_passed":  False,
+                    "integration_details": f"integration test runner crashed: {exc}",
+                }
+            result.update(integration)
+
+            # The ecosystem only passes overall when apps deployed AND integration passed.
+            # Preserve the original fail_reason if the individual apps already failed; only
+            # downgrade a passed-apps run when integration fails on top.
+            if result.get("passed") and not integration["integration_passed"]:
+                result["passed"]      = False
+                result["status"]      = "failed"
+                result["fail_reason"] = integration["integration_details"]
 
             _finalize_run_row(run_id, result)
 
@@ -323,6 +364,11 @@ def _serialize_run(run: EcosystemRun) -> dict:
         "apps_detail":          _decode(run.apps_detail),
         "apps_planned_json":    _decode(run.apps_planned_json),
         "error_message":        run.error_message,
+        "integration_score":    getattr(run, "integration_score",  0) or 0,
+        "integration_passed":   bool(getattr(run, "integration_passed", False)),
+        "integration_tests":    _decode(getattr(run, "integration_results", None)),
+        "integration_details":  getattr(run, "integration_details", None),
+        "marketplace_eligible": bool(getattr(run, "marketplace_eligible", False)),
         "created_at":           run.created_at.isoformat() if run.created_at else None,
         "completed_at":         run.completed_at.isoformat() if run.completed_at else None,
     }
@@ -345,19 +391,20 @@ def get_ecosystem_batch(batch_id: int, db: Session = Depends(get_db)):
     completed = sum(1 for r in runs if r.status in ("passed", "failed", "error"))
 
     return {
-        "batch_id":       batch.id,
-        "type":           batch.type,
-        "status":         batch.status,
-        "scenario_count": batch.scenario_count,
-        "app_count":      batch.app_count,
-        "completed":      completed,
-        "pass_count":     batch.pass_count,
-        "fail_count":     batch.fail_count,
-        "pass_rate":      batch.pass_rate,
-        "avg_build_time": batch.avg_build_time,
-        "started_at":     batch.started_at.isoformat()    if batch.started_at    else None,
-        "completed_at":   batch.completed_at.isoformat()  if batch.completed_at  else None,
-        "runs":           [_serialize_run(r) for r in runs],
+        "batch_id":             batch.id,
+        "type":                 batch.type,
+        "status":               batch.status,
+        "scenario_count":       batch.scenario_count,
+        "app_count":            batch.app_count,
+        "completed":            completed,
+        "pass_count":           batch.pass_count,
+        "fail_count":           batch.fail_count,
+        "pass_rate":            batch.pass_rate,
+        "avg_build_time":       batch.avg_build_time,
+        "marketplace_eligible": bool(getattr(batch, "marketplace_eligible", False)),
+        "started_at":           batch.started_at.isoformat()    if batch.started_at    else None,
+        "completed_at":         batch.completed_at.isoformat()  if batch.completed_at  else None,
+        "runs":                 [_serialize_run(r) for r in runs],
     }
 
 
@@ -373,17 +420,18 @@ def list_ecosystem_batches(db: Session = Depends(get_db)):
     return {
         "batches": [
             {
-                "batch_id":       b.id,
-                "type":           b.type,
-                "status":         b.status,
-                "scenario_count": b.scenario_count,
-                "app_count":      b.app_count,
-                "pass_count":     b.pass_count,
-                "fail_count":     b.fail_count,
-                "pass_rate":      b.pass_rate,
-                "avg_build_time": b.avg_build_time,
-                "started_at":     b.started_at.isoformat()   if b.started_at   else None,
-                "completed_at":   b.completed_at.isoformat() if b.completed_at else None,
+                "batch_id":             b.id,
+                "type":                 b.type,
+                "status":               b.status,
+                "scenario_count":       b.scenario_count,
+                "app_count":            b.app_count,
+                "pass_count":           b.pass_count,
+                "fail_count":           b.fail_count,
+                "pass_rate":            b.pass_rate,
+                "avg_build_time":       b.avg_build_time,
+                "marketplace_eligible": bool(getattr(b, "marketplace_eligible", False)),
+                "started_at":           b.started_at.isoformat()   if b.started_at   else None,
+                "completed_at":         b.completed_at.isoformat() if b.completed_at else None,
             }
             for b in batches
         ]

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/services";
 import { usePoll } from "../hooks/usePoll";
+import ApproveModal from "../ApproveModal";
 
 const statusColor = {
   passed: "#a6e3a1",
@@ -22,6 +23,7 @@ export default function BatchMonitor({ batchId, onBack }) {
   const [batch, setBatch] = useState(null);
   const [loading, setLoading] = useState(true);
   const [hasFetched, setHasFetched] = useState(false);
+  const [approveRun, setApproveRun] = useState(null);
 
   // FIX: stop polling on any terminal state, not just when status is 'running'/'pending'
   // Previously: batch?.status === "running" || batch?.status === "pending"
@@ -184,11 +186,38 @@ export default function BatchMonitor({ batchId, onBack }) {
                     {run.build_time_seconds}s
                   </span>
                 )}
+
+                {/* Approve button — only shown on passed builds that produced a
+                    live URL. Score ≥ 80 is not tracked in Run today, so a
+                    green/live_url run is our strongest available proxy. */}
+                {run.status === "passed" && run.live_url && (
+                  <button
+                    type="button"
+                    onClick={() => setApproveRun(run)}
+                    style={{
+                      background: "#7c3aed",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "6px",
+                      padding: "4px 10px",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    ✓ Approve for Marketplace
+                  </button>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {approveRun && (
+        <ApproveModal run={approveRun} onClose={() => setApproveRun(null)} />
+      )}
     </div>
   );
 }
