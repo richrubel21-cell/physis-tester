@@ -5,14 +5,18 @@ Ecosystem Tester — two test modes that drive the Physis /api/ecosystem-builder
 MODE A — Full Ecosystem Build:
   1. POST /api/ecosystem-builder/plan with the business description + app_count
   2. Auto-approve the returned plan
-  3. Fan out a /build call for every planned app (async gather, relying on
-     Physis's own MAX_CONCURRENT_BUILDS queue to serialise)
+  3. Build every planned app strictly one-at-a-time (await per app). We used
+     to fan out with asyncio.gather and rely on Physis's MAX_CONCURRENT_BUILDS
+     queue to serialise downstream, but the platform requirement is that
+     ecosystem apps build sequentially — the tester now enforces that
+     directly so it cannot be subverted by raising MAX_CONCURRENT_BUILDS.
   4. For each build, poll /build/{id}/status until a final event lands
   5. PASS only if every planned app returned a live_url
 
 MODE B — Sequential Ecosystem Build:
-  Same plan step, but builds run strictly one-at-a-time with join_ecosystem=True
-  so the join flow is exercised on every single app.
+  Same plan + sequential build flow as Mode A, kept for parity with the
+  existing test plan / dashboards. join_ecosystem=True on every build so
+  the join flow is exercised on every single app.
 
 Verification note — ecosystem nav integration:
   Verifying that the deployed apps actually appear in a live ecosystem nav
@@ -316,32 +320,26 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
 
     apps = plan["apps"]
 
-    # Fire every build concurrently. Physis's own queue (MAX_CONCURRENT_BUILDS=2)
-    # will serialise downstream, we just stream the requests in.
-    tasks = [
-        _run_single_app_build(a, user_id, join_ecosystem=True)
-        for a in apps
-    ]
-    try:
-        apps_detail = await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=False),
-            timeout=ECOSYSTEM_TOTAL_BUDGET,
-        )
-    except asyncio.TimeoutError:
-        return {
-            "status":             "failed",
-            "apps_planned":       len(apps),
-            "apps_built":         0,
-            "apps_deployed":      0,
-            "apps_integrated":    0,
-            "passed":             False,
-            "fail_reason":        f"overall ecosystem build exceeded {ECOSYSTEM_TOTAL_BUDGET}s",
-            "total_time_seconds": round(time.time() - start, 2),
-            "app_urls":           [],
-            "apps_detail":        [],
-            "apps_planned_json":  apps,
-            "error_message":      "ecosystem budget exceeded",
-        }
+    # Build apps strictly one-at-a-time. Sequential is a platform
+    # requirement for ecosystems — see module docstring. The wall-clock
+    # budget is checked between apps so we still exit cleanly if the
+    # plan is too large for ECOSYSTEM_TOTAL_BUDGET.
+    apps_detail: list[dict] = []
+    for app in apps:
+        if time.time() - start > ECOSYSTEM_TOTAL_BUDGET:
+            apps_detail.append({
+                "name":       app.get("name"),
+                "purpose":    app.get("purpose"),
+                "category":   app.get("template_category"),
+                "build_id":   None,
+                "status":     "failed",
+                "live_url":   None,
+                "build_time": None,
+                "error":      "overall ecosystem budget exceeded before this app started",
+            })
+            continue
+        detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
+        apps_detail.append(detail)
 
     summary = _summarise_apps(apps_detail)
     passed  = summary["apps_deployed"] == len(apps)
