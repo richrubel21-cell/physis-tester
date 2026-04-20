@@ -31,6 +31,15 @@ Base.metadata.create_all(bind=engine)
 #      one bad column without losing the rest.
 def _ensure_columns():
     inspector = inspect(engine)
+    # IMPORTANT — every column added to a model AFTER its table was first
+    # created via Base.metadata.create_all() must be listed here, otherwise
+    # the prod DB schema drifts from the ORM and any SELECT involving the
+    # missing column raises UndefinedColumn.
+    #
+    # Audit done 2026-04-19 against models.py: every later-added column on
+    # Run / EcosystemBatch / EcosystemRun is now covered. Scenario / Batch /
+    # MaryBatch / MaryRun have never gained a column post-creation, so
+    # they don't need entries.
     plans = [
         ("runs", [
             ("proof_score",                    "INTEGER DEFAULT 0"),
@@ -47,7 +56,20 @@ def _ensure_columns():
             ("all_apps_output_passed",         "BOOLEAN DEFAULT FALSE"),
             ("functional_failure_screenshots", "TEXT"),
         ]),
+        # ecosystem_batches gained marketplace_eligible after the batch
+        # rollup landed. Missing column was triggering UndefinedColumn on
+        # /ecosystem/batches and /ecosystem/analytics — caught in prod.
+        ("ecosystem_batches", [
+            ("marketplace_eligible", "BOOLEAN DEFAULT FALSE"),
+        ]),
         ("ecosystem_runs", [
+            # Integration tests (22–29) — added when the 8 cross-ecosystem
+            # tests landed (commit 9e0b64d). Never made it into a migration.
+            ("integration_score",           "INTEGER DEFAULT 0"),
+            ("integration_passed",          "BOOLEAN DEFAULT FALSE"),
+            ("integration_results",         "TEXT"),
+            ("integration_details",         "TEXT"),
+            # Per-app validity rollup (tests 30–36).
             ("validity_score",              "INTEGER DEFAULT 0"),
             ("validity_passed",             "BOOLEAN DEFAULT FALSE"),
             ("all_powered_by_physis",       "BOOLEAN DEFAULT FALSE"),
@@ -56,6 +78,9 @@ def _ensure_columns():
             ("functional_passed",           "BOOLEAN DEFAULT FALSE"),
             ("all_apps_output_passed",      "BOOLEAN DEFAULT FALSE"),
             ("ecosystem_functional_tests",  "TEXT"),
+            # Per-ecosystem marketplace eligibility — also added later,
+            # also never migrated.
+            ("marketplace_eligible",        "BOOLEAN DEFAULT FALSE"),
         ]),
     ]
     for table, cols in plans:
