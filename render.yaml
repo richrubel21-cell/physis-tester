@@ -1,23 +1,9 @@
 services:
   - type: web
     name: physis-tester
-    # Docker runtime — using the official Playwright Python image so
-    # chromium ships pre-installed with all system libs (libnss3,
-    # libxkbcommon, fontconfig, etc.). The native Render Python
-    # runtime can't install those because `playwright install
-    # --with-deps` requires root via su, and Render's build env blocks
-    # the escalation ("Switching to root user… Authentication failure").
-    # Per Playwright's own docs and Render community consensus, the
-    # mcr.microsoft.com/playwright image is the only reliable path.
-    runtime: docker
-    region: oregon
-    # Standard required for Playwright + chromium (~250-400 MB RAM
-    # per browser context). Free tier OOMs the worker on first launch.
+    runtime: image
     plan: standard
-    # rootDir = backend means dockerfilePath / dockerContext are
-    # resolved relative to backend/. So Dockerfile lives at
-    # backend/Dockerfile and the build context is backend/ (which
-    # contains app/, requirements.txt, Dockerfile itself).
+    region: oregon
     rootDir: backend
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -27,10 +13,6 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: FRONTEND_URL
-        value: https://physis-tester.pages.dev
-      # Optional: set to enable Tests 43 & 46 (marketplace functional
-      # tests). Bearer token for a dedicated Supabase test user that
-      # licenses real marketplace apps via POST /api/marketplace/license.
-      # Leave unset to skip those tests with reason "no test user token".
+        sync: false
       - key: PHYSIS_TEST_USER_TOKEN
         sync: false
