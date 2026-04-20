@@ -47,7 +47,9 @@ Result shape returned by run_single_ecosystem():
 
 import asyncio
 import json
+import logging
 import random
+import sys
 import time
 import uuid
 
@@ -60,12 +62,23 @@ from .simulator import (
 )
 
 
-# Direct print() for logs — Python's logging module silently drops
-# records when no handler is attached anywhere in the hierarchy
-# (uvicorn's default state for application loggers). print(...,
-# flush=True) goes straight to stdout so Render's Live Tail catches
-# every line. PYTHONUNBUFFERED=1 in the Dockerfile + explicit flush
-# is belt-and-suspenders.
+# See simulator.py for the rationale: print() from async paths in this
+# image isn't reliably captured by Render's log collector, but a
+# logging.Logger with an explicit StreamHandler→sys.stdout is. We
+# attach to the same "physis_tester" logger so both modules' lines
+# land under one name in Live Tail. The handler-add guard is a no-op
+# here when simulator.py imported first (the usual order), but
+# defends against being imported standalone.
+logger = logging.getLogger("physis_tester")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setLevel(logging.INFO)
+    _handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s"
+    ))
+    logger.addHandler(_handler)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +108,7 @@ async def _plan_ecosystem(description: str, app_count: int, user_id: str) -> dic
     caller surfaces as fail_reason.
     """
     desc_preview = (description or "").strip().replace("\n", " ")[:80]
-    print(f"[ecosystem] plan request: {desc_preview!r} (app_count={app_count})", flush=True)
+    logger.info(f"[ecosystem] plan request: {desc_preview!r} (app_count={app_count})")
     try:
         async with httpx.AsyncClient(timeout=PLAN_TIMEOUT_SECONDS) as client:
             resp = await client.post(
@@ -108,17 +121,17 @@ async def _plan_ecosystem(description: str, app_count: int, user_id: str) -> dic
                 headers={"Content-Type": "application/json"},
             )
     except httpx.TimeoutException:
-        print(f"[ecosystem] plan timeout for {desc_preview!r}", flush=True)
+        logger.info(f"[ecosystem] plan timeout for {desc_preview!r}")
         return {"ok": False, "error": "plan timeout (Physis AI planner took too long)", "apps": []}
     except httpx.ConnectError:
-        print(f"[ecosystem] plan connect error for {desc_preview!r}", flush=True)
+        logger.info(f"[ecosystem] plan connect error for {desc_preview!r}")
         return {"ok": False, "error": "Cannot connect to physis.onrender.com", "apps": []}
     except Exception as exc:
-        print(f"[ecosystem] plan crashed for {desc_preview!r}: {exc}", flush=True)
+        logger.info(f"[ecosystem] plan crashed for {desc_preview!r}: {exc}")
         return {"ok": False, "error": f"plan request crashed: {exc}", "apps": []}
 
     if resp.status_code != 200:
-        print(f"[ecosystem] plan HTTP {resp.status_code} for {desc_preview!r}", flush=True)
+        logger.info(f"[ecosystem] plan HTTP {resp.status_code} for {desc_preview!r}")
         return {
             "ok":    False,
             "error": f"plan returned HTTP {resp.status_code}: {resp.text[:300]}",
@@ -128,18 +141,17 @@ async def _plan_ecosystem(description: str, app_count: int, user_id: str) -> dic
     try:
         data = resp.json()
     except Exception:
-        print(f"[ecosystem] plan non-JSON for {desc_preview!r}", flush=True)
+        logger.info(f"[ecosystem] plan non-JSON for {desc_preview!r}")
         return {"ok": False, "error": f"plan returned non-JSON: {resp.text[:300]}", "apps": []}
 
     apps = data.get("apps") or []
     if not isinstance(apps, list) or len(apps) == 0:
-        print(f"[ecosystem] plan returned no apps for {desc_preview!r}", flush=True)
+        logger.info(f"[ecosystem] plan returned no apps for {desc_preview!r}")
         return {"ok": False, "error": "plan returned no apps", "apps": []}
 
-    print(
+    logger.info(
         f"[ecosystem] plan received: {len(apps)} apps — "
-        f"{', '.join(str(a.get('name') or '?') for a in apps[:5])}",
-        flush=True,
+        f"{', '.join(str(a.get('name') or '?') for a in apps[:5])}"
     )
     return {"ok": True, "apps": apps, "raw": data}
 
@@ -384,9 +396,8 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
     apps_detail: list[dict] = []
     for idx, app in enumerate(apps, start=1):
         if time.time() - start > ECOSYSTEM_TOTAL_BUDGET:
-            print(
-                f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] skipped — wall-clock budget exhausted",
-                flush=True,
+            logger.info(
+                f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] skipped — wall-clock budget exhausted"
             )
             apps_detail.append({
                 "name":       app.get("name"),
@@ -399,27 +410,24 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
                 "error":      "overall ecosystem budget exceeded before this app started",
             })
             continue
-        print(
+        logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] starting build: "
-            f"{app.get('name') or '(unnamed)'}",
-            flush=True,
+            f"{app.get('name') or '(unnamed)'}"
         )
         detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
         apps_detail.append(detail)
-        print(
+        logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] done — "
             f"status={detail.get('status') or 'unknown'} "
-            f"live_url={detail.get('live_url') or '(none)'}",
-            flush=True,
+            f"live_url={detail.get('live_url') or '(none)'}"
         )
 
     summary = _summarise_apps(apps_detail)
     passed, fail_reason = _evaluate_ecosystem_pass(apps_detail, summary, len(apps))
-    print(
+    logger.info(
         f"[ecosystem: {eco_tag}] full mode complete — passed={passed} "
         f"deployed={summary['apps_deployed']}/{len(apps)} "
-        f"duration={time.time() - start:.1f}s",
-        flush=True,
+        f"duration={time.time() - start:.1f}s"
     )
 
     return {
@@ -509,9 +517,8 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
     for idx, app in enumerate(apps, start=1):
         # Budget check — stop early if we've burned the wall-clock
         if time.time() - start > ECOSYSTEM_TOTAL_BUDGET:
-            print(
-                f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] skipped — wall-clock budget exhausted",
-                flush=True,
+            logger.info(
+                f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] skipped — wall-clock budget exhausted"
             )
             apps_detail.append({
                 "name":       app.get("name"),
@@ -524,27 +531,24 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
                 "error":      f"overall ecosystem budget exceeded before this app started",
             })
             continue
-        print(
+        logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] starting build: "
-            f"{app.get('name') or '(unnamed)'}",
-            flush=True,
+            f"{app.get('name') or '(unnamed)'}"
         )
         detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
         apps_detail.append(detail)
-        print(
+        logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] done — "
             f"status={detail.get('status') or 'unknown'} "
-            f"live_url={detail.get('live_url') or '(none)'}",
-            flush=True,
+            f"live_url={detail.get('live_url') or '(none)'}"
         )
 
     summary = _summarise_apps(apps_detail)
     passed, fail_reason = _evaluate_ecosystem_pass(apps_detail, summary, len(apps))
-    print(
+    logger.info(
         f"[ecosystem: {eco_tag}] sequential mode complete — passed={passed} "
         f"deployed={summary['apps_deployed']}/{len(apps)} "
-        f"duration={time.time() - start:.1f}s",
-        flush=True,
+        f"duration={time.time() - start:.1f}s"
     )
     # Sequential mode's pre-Phase-B fallback message was distinct ("did
     # not fully deploy" vs "one or more apps failed to deploy"). The

@@ -1,4 +1,17 @@
+import io
 import os
+import sys
+
+# Force line buffering on stdout/stderr before anything else imports
+# or writes. PYTHONUNBUFFERED=1 in the Dockerfile should already do
+# this, but a misconfigured env or a third-party module that re-opens
+# the streams can defeat it. Re-wrapping the underlying buffers with
+# line_buffering=True is idempotent and survives env-var changes —
+# every newline-terminated write hits the FD immediately, which is
+# what Render's log collector needs.
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, line_buffering=True)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
@@ -14,7 +27,7 @@ from .routes.admin import router as admin_router, cleanup_orphans_at_startup
 # `grep "[physis-tester] starting"` in Render Live Tail confirms which
 # revision is actually running. Stops us misdiagnosing "the new code
 # isn't taking effect" when really the image just hasn't rebuilt.
-VERSION_TAG = "efb8720"
+VERSION_TAG = "logger-stream"
 print(f"[physis-tester] starting {VERSION_TAG}", flush=True)
 
 Base.metadata.create_all(bind=engine)
