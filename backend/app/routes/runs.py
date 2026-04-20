@@ -100,6 +100,17 @@ def get_batch_status(batch_id: int, db: Session = Depends(get_db)):
                 "validity_tests":     _decode_validity_tests(getattr(r, "validity_tests", None)),
                 "app_works":          bool(getattr(r, "app_works", False)),
                 "powered_by_physis":  bool(getattr(r, "powered_by_physis", False)),
+                # Functional sweep (tests 37–46). functional_tests +
+                # functional_failure_screenshots are JSON strings; both
+                # decode back to lists for the dashboard.
+                "functional_score":               int(getattr(r, "functional_score", 0) or 0),
+                "functional_passed":              bool(getattr(r, "functional_passed", False)),
+                "functional_tests":               _decode_validity_tests(getattr(r, "functional_tests", None)),
+                "journey_passed":                 bool(getattr(r, "journey_passed", False)),
+                "all_apps_output_passed":         bool(getattr(r, "all_apps_output_passed", False)),
+                "functional_failure_screenshots": _decode_validity_tests(
+                    getattr(r, "functional_failure_screenshots", None)
+                ),
             })
         except Exception as exc:
             # One bad row shouldn't blank the whole batch — drop it and

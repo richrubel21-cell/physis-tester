@@ -56,6 +56,20 @@ class Run(Base):
     validity_tests      = Column(Text, nullable=True)
     app_works           = Column(Boolean, default=False)
     powered_by_physis   = Column(Boolean, default=False)
+    # ── Functional tests (37–46) — headless-browser checks that prove
+    # the deployed app actually works for a user, not just renders HTML.
+    # functional_score is the count of passing tests in the per-app set
+    # (37, 38, 39, 40, 44 — the 5 single-app tests). Tests 41/42/45 are
+    # ecosystem-only and roll up on EcosystemRun. Tests 43/46 are
+    # marketplace-only and gated behind PHYSIS_TEST_USER_TOKEN.
+    # functional_failure_screenshots is a JSON array of {test_id,
+    # png_b64, captured_at} dicts, capped at 200 KB per image.
+    functional_score                 = Column(Integer, default=0)
+    functional_passed                = Column(Boolean, default=False)
+    functional_tests                 = Column(Text, nullable=True)
+    journey_passed                   = Column(Boolean, default=False)
+    all_apps_output_passed           = Column(Boolean, default=False)
+    functional_failure_screenshots   = Column(Text, nullable=True)
     batch = relationship("Batch", back_populates="runs")
     scenario = relationship("Scenario", back_populates="runs")
 
@@ -166,6 +180,18 @@ class EcosystemRun(Base):
     validity_score        = Column(Integer, default=0)
     validity_passed       = Column(Boolean, default=False)
     all_powered_by_physis = Column(Boolean, default=False)
+    # ── Functional rollup across every app in the ecosystem (Tests 37–46).
+    # functional_score is the average per-app functional_score.
+    # functional_passed is True only when EVERY app passed its full
+    # functional set AND the cross-ecosystem tests (41, 42, 45) passed.
+    # all_apps_output_passed is the strict "Test 45" rollup — every app
+    # produced valid AI output, not just one of them.
+    # ecosystem_functional_tests holds the cross-ecosystem test results
+    # (41, 42, 45, 43) as a JSON array.
+    functional_score             = Column(Integer, default=0)
+    functional_passed            = Column(Boolean, default=False)
+    all_apps_output_passed       = Column(Boolean, default=False)
+    ecosystem_functional_tests   = Column(Text, nullable=True)
     # Only true when every app passed its individual tests AND integration_score == 8
     marketplace_eligible  = Column(Boolean, default=False)
     created_at            = Column(DateTime, default=datetime.utcnow)

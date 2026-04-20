@@ -387,6 +387,12 @@ def _serialize_run(run: EcosystemRun) -> dict:
         "validity_score":         int(getattr(run, "validity_score", 0) or 0),
         "validity_passed":        bool(getattr(run, "validity_passed", False)),
         "all_powered_by_physis":  bool(getattr(run, "all_powered_by_physis", False)),
+        # Functional aggregate (tests 37–46) — Phase 1 surfaces the
+        # storage; Phases 2–5 wire the actual writers.
+        "functional_score":           int(getattr(run, "functional_score", 0) or 0),
+        "functional_passed":          bool(getattr(run, "functional_passed", False)),
+        "all_apps_output_passed":     bool(getattr(run, "all_apps_output_passed", False)),
+        "ecosystem_functional_tests": _decode(getattr(run, "ecosystem_functional_tests", None)),
         "marketplace_eligible":   bool(getattr(run, "marketplace_eligible", False)),
         "created_at":             run.created_at.isoformat() if run.created_at else None,
         "completed_at":           run.completed_at.isoformat() if run.completed_at else None,
