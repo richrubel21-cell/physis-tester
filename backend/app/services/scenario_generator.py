@@ -340,16 +340,67 @@ def get_seed_scenarios(count: int = 10) -> list[dict]:
     ]
 
 
-def generate_ai_scenarios(count: int = 5, categories: list[str] = None) -> list[dict]:
-    """Use Claude to generate new realistic human-like Physis descriptions."""
+def _round_robin_categories(n: int) -> list[str]:
+    """Build a length-n category list that maximises variety. For n >= 5
+    every cycle of 5 hits all categories (shuffled order each cycle so
+    we don't always lead with 'generators'). For n < 5 it picks n
+    distinct categories. Used by generate_ai_scenarios to stop Claude
+    returning 3 trackers in a row."""
+    if n <= 0:
+        return []
+    if n < len(CATEGORY_NAMES):
+        return random.sample(CATEGORY_NAMES, n)
+    out: list[str] = []
+    while len(out) < n:
+        cycle = CATEGORY_NAMES[:]
+        random.shuffle(cycle)
+        out.extend(cycle)
+    return out[:n]
+
+
+def generate_ai_scenarios(
+    count: int = 5,
+    categories: list[str] = None,
+    required_categories: list[str] = None,
+) -> list[dict]:
+    """Use Claude to generate new realistic human-like Physis descriptions.
+
+    required_categories (length must equal count) pins each generated
+    scenario to a specific Physis category. When provided it overrides
+    the looser 'categories' allowlist and gives Claude a numbered list
+    so the bias toward tracker/health archetypes can't dominate every
+    slot in the batch."""
     if not categories:
         categories = CATEGORY_NAMES
+    # Belt-and-suspenders: if caller passed a wrong-length required list
+    # fall back to round-robin rather than crash. Length mismatch is a
+    # bug, but the batch should still ship.
+    if required_categories and len(required_categories) != count:
+        required_categories = None
+
+    if required_categories:
+        slot_lines = "\n".join(
+            f"  {i + 1}. category={cat}"
+            for i, cat in enumerate(required_categories)
+        )
+        category_block = (
+            "Each scenario must target one specific category in this exact order — "
+            "do NOT swap or repeat:\n" + slot_lines
+        )
+    else:
+        category_block = (
+            f"Map each to one of the 5 Physis template categories: {', '.join(categories)}."
+        )
 
     prompt = f"""You are generating test inputs for an AI web app builder called Physis.
 Physis takes plain English descriptions from real users and builds complete web apps.
 
 Generate {count} realistic, diverse test descriptions that sound like real people writing naturally.
-Mix simple and complex requests. Map each to one of the 5 Physis template categories: {', '.join(categories)}.
+Mix simple and complex requests.
+
+{category_block}
+
+AVOID these over-used archetypes: water intake trackers, sleep trackers, mood loggers, habit trackers, recipe generators, fitness coaches, meal planners. Push for unexpected scenarios — creative tools, business tools, niche hobbies, life admin, travel planning, communication helpers, decision tools, learning aids, real estate, finance, parenting, pets, events. Every scenario should feel genuinely different from the others in this batch.
 
 Return ONLY a JSON array, no markdown, no explanation. Format:
 [
@@ -363,7 +414,8 @@ Rules:
 - Some people give vague requests, some give very specific ones
 - Do NOT use technical jargon
 - Categories must be one of: {', '.join(categories)}
-- Complexity must be one of: simple, medium, advanced"""
+- Complexity must be one of: simple, medium, advanced
+- Order of returned scenarios must match the slot order above"""
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
@@ -400,8 +452,13 @@ def generate_scenarios(count: int = 10, use_ai: bool = True) -> list[dict]:
 
     seeds = get_seed_scenarios(seed_count)
 
+    # Round-robin the AI half across the 5 Physis categories so Claude
+    # can't quietly stack the batch with three trackers — root cause of
+    # the "every batch has water intake" bias diagnosis.
+    required = _round_robin_categories(ai_count)
+
     try:
-        ai_scenarios = generate_ai_scenarios(ai_count)
+        ai_scenarios = generate_ai_scenarios(ai_count, required_categories=required)
         return seeds + ai_scenarios
     except Exception as e:
         print(f"AI generation failed, falling back to seed only: {e}")
