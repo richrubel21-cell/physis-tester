@@ -7,8 +7,10 @@ anthropic
 python-dotenv
 psycopg2-binary
 # Playwright drives headless chromium for the functional test suite
-# (Tests 37-46). render.yaml's buildCommand runs `playwright install
-# --with-deps chromium` after pip so the browser is on disk before
-# the worker boots.
-playwright>=1.49.0
+# (Tests 37-46). The image at mcr.microsoft.com/playwright/python:
+# v1.49.0-jammy ships chromium pre-installed for playwright 1.49.0
+# specifically — pinning the python package to the exact same version
+# so pip can never resolve to a newer release whose driver expects
+# a browser layout the image doesn't match.
+playwright==1.49.0
 

@@ -84,11 +84,25 @@ async def get_browser() -> Any:
         if _browser_singleton is not None:
             return _browser_singleton
         _pw_singleton = await async_playwright().start()
-        # --no-sandbox is required when running as root inside a Render
-        # container; chromium otherwise refuses to start.
+        # Container-safe launch flags. Required when chromium runs
+        # inside Render's Docker runtime on the official Playwright
+        # image:
+        #   --no-sandbox / --disable-setuid-sandbox: chromium refuses
+        #     to start as root without these (or without a kernel
+        #     capability we don't have inside the container).
+        #   --disable-dev-shm-usage: containers default /dev/shm to
+        #     64 MB; chromium crashes when its shared-memory cache
+        #     overflows. This forces it to /tmp instead.
+        #   --disable-gpu: no GPU on Render; suppress the WebGL probe
+        #     spam in logs.
         _browser_singleton = await _pw_singleton.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+            ],
         )
         return _browser_singleton
 

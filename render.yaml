@@ -1,27 +1,26 @@
 services:
   - type: web
     name: physis-tester
-    runtime: python
+    # Docker runtime — using the official Playwright Python image so
+    # chromium ships pre-installed with all system libs (libnss3,
+    # libxkbcommon, fontconfig, etc.). The native Render Python
+    # runtime can't install those because `playwright install
+    # --with-deps` requires root via su, and Render's build env blocks
+    # the escalation ("Switching to root user… Authentication failure").
+    # Per Playwright's own docs and Render community consensus, the
+    # mcr.microsoft.com/playwright image is the only reliable path.
+    runtime: docker
     region: oregon
-    # Standard required for Playwright + chromium (~400 MB on disk,
-    # ~250-400 MB RAM per browser context). Free tier OOMs the worker
-    # the moment chromium loads alongside FastAPI + SQLAlchemy.
+    # Standard required for Playwright + chromium (~250-400 MB RAM
+    # per browser context). Free tier OOMs the worker on first launch.
     plan: standard
-    # buildCommand drops --with-deps because Render's build env blocks
-    # the su/root escalation that --with-deps needs to apt-install
-    # chromium's system libs ("Switching to root user… Password: su:
-    # Authentication failure"). Without --with-deps, playwright still
-    # downloads the chromium binary into ~/.cache/ms-playwright; the
-    # base Render image is expected to ship glibc + fontconfig +
-    # libnss + libxkbcommon already, so chromium should launch.
-    # If chromium ever fails to *launch* at runtime with a missing-
-    # library error (e.g. "error while loading shared libraries:
-    # libfoo.so.X"), we'll diagnose from that runtime error and either
-    # bake the lib in via a custom Docker image or switch to a build
-    # plan that allows root.
-    buildCommand: pip install -r requirements.txt && playwright install chromium
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # rootDir = backend means dockerfilePath / dockerContext are
+    # resolved relative to backend/. So Dockerfile lives at
+    # backend/Dockerfile and the build context is backend/ (which
+    # contains app/, requirements.txt, Dockerfile itself).
     rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
