@@ -14,7 +14,7 @@ from .routes.admin import router as admin_router, cleanup_orphans_at_startup
 # `grep "[physis-tester] starting"` in Render Live Tail confirms which
 # revision is actually running. Stops us misdiagnosing "the new code
 # isn't taking effect" when really the image just hasn't rebuilt.
-VERSION_TAG = "fix/error-type-capture"
+VERSION_TAG = "efb8720"
 print(f"[physis-tester] starting {VERSION_TAG}", flush=True)
 
 Base.metadata.create_all(bind=engine)
