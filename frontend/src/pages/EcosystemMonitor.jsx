@@ -107,7 +107,7 @@ export default function EcosystemMonitor({ batchId, onBack }) {
         <span style={{ background: batch.type === "full" ? "#2a4a3f" : "#4a3f2a", color: batch.type === "full" ? "#94e2d5" : "#f9e2af", borderRadius: "6px", padding: "2px 10px", fontSize: "11px", fontWeight: "600", marginRight: "10px" }}>
           {batch.type}
         </span>
-        {batch.app_count} apps per scenario · {total} scenarios total · 29 tests per app + 8 integration tests
+        {batch.app_count} apps per scenario · {total} scenarios total · 29 tests per app + 8 integration = 36 tests per ecosystem
         {batch.marketplace_eligible && (
           <span style={{ marginLeft: "10px", background: "#1e3a2e", color: "#a6e3a1", borderRadius: "6px", padding: "2px 10px", fontSize: "11px", fontWeight: "700" }}>
             ✓ Marketplace Eligible
@@ -239,44 +239,142 @@ export default function EcosystemMonitor({ batchId, onBack }) {
                           <table style={{ width: "100%", borderCollapse: "collapse" }}>
                             <thead>
                               <tr style={{ borderBottom: "1px solid #313244" }}>
-                                {["App", "Category", "Status", "Live URL", "Build Time"].map(h => (
+                                {["App", "Category", "Status", "Proof", "Validity", "App Works", "Live URL", "Build Time"].map(h => (
                                   <th key={h} style={{ color: "#6c7086", fontSize: "11px", textAlign: "left", padding: "6px 8px", fontWeight: "600" }}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
                             <tbody>
-                              {run.apps_detail.map((a, i) => (
-                                <tr key={i} style={{ borderBottom: "1px solid #11111b" }}>
-                                  <td style={{ color: "#cdd6f4", padding: "6px 8px", fontSize: "12px" }}>{a.name || "—"}</td>
-                                  <td style={{ color: "#6c7086", padding: "6px 8px", fontSize: "12px" }}>{a.category || "—"}</td>
-                                  <td style={{ padding: "6px 8px" }}>
-                                    <span style={{
-                                      background: statusBg[a.status] || "#1e1e2e",
-                                      color:      statusColor[a.status] || "#cdd6f4",
-                                      borderRadius: "5px",
-                                      padding: "1px 8px",
-                                      fontSize: "11px",
-                                      fontWeight: "600",
+                              {run.apps_detail.map((a, i) => {
+                                // Proof score isn't stored per-app yet — fall back to "—" until the
+                                // single-app pipeline starts attaching proof_score to apps_detail.
+                                const proof    = a.proof_score != null ? `${a.proof_score}/21` : "—";
+                                const validity = a.validity_score != null ? `${a.validity_score}/7` : "—";
+                                const works    = !!a.validity_passed;
+                                return (
+                                  <tr key={i} style={{ borderBottom: "1px solid #11111b" }}>
+                                    <td style={{ color: "#cdd6f4", padding: "6px 8px", fontSize: "12px" }}>{a.name || "—"}</td>
+                                    <td style={{ color: "#6c7086", padding: "6px 8px", fontSize: "12px" }}>{a.category || "—"}</td>
+                                    <td style={{ padding: "6px 8px" }}>
+                                      <span style={{
+                                        background: statusBg[a.status] || "#1e1e2e",
+                                        color:      statusColor[a.status] || "#cdd6f4",
+                                        borderRadius: "5px",
+                                        padding: "1px 8px",
+                                        fontSize: "11px",
+                                        fontWeight: "600",
+                                      }}>
+                                        {a.status || "—"}
+                                      </span>
+                                    </td>
+                                    <td style={{ color: "#cdd6f4", padding: "6px 8px", fontSize: "12px" }}>{proof}</td>
+                                    <td style={{
+                                      padding: "6px 8px",
+                                      fontSize: "12px",
+                                      color: a.validity_score == null ? "#6c7086" : (works ? "#a6e3a1" : "#f38ba8"),
                                     }}>
-                                      {a.status || "—"}
-                                    </span>
-                                  </td>
-                                  <td style={{ padding: "6px 8px", fontSize: "12px" }}>
-                                    {a.live_url ? (
-                                      <a href={a.live_url} target="_blank" rel="noreferrer" style={{ color: "#89b4fa" }}>
-                                        🔗 open
-                                      </a>
-                                    ) : (
-                                      <span style={{ color: "#6c7086" }}>—</span>
-                                    )}
-                                  </td>
-                                  <td style={{ color: "#6c7086", padding: "6px 8px", fontSize: "12px" }}>
-                                    {a.build_time != null ? `${a.build_time}s` : "—"}
-                                  </td>
-                                </tr>
-                              ))}
+                                      {validity} {a.validity_score != null ? (works ? "✅" : "❌") : ""}
+                                    </td>
+                                    <td style={{ padding: "6px 8px", fontSize: "12px" }}>
+                                      {a.validity_score == null ? (
+                                        <span style={{ color: "#6c7086" }}>—</span>
+                                      ) : works ? (
+                                        <span style={{ color: "#a6e3a1" }}>✅</span>
+                                      ) : (
+                                        <span style={{ color: "#f38ba8" }}>❌</span>
+                                      )}
+                                      {a.powered_by_physis === false && a.validity_score != null && (
+                                        <span style={{ marginLeft: "6px", color: "#f38ba8", fontSize: "10px", fontWeight: "700" }}>
+                                          🚨 NO BADGE
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: "6px 8px", fontSize: "12px" }}>
+                                      {a.live_url ? (
+                                        <a href={a.live_url} target="_blank" rel="noreferrer" style={{ color: "#89b4fa" }}>
+                                          🔗 open
+                                        </a>
+                                      ) : (
+                                        <span style={{ color: "#6c7086" }}>—</span>
+                                      )}
+                                    </td>
+                                    <td style={{ color: "#6c7086", padding: "6px 8px", fontSize: "12px" }}>
+                                      {a.build_time != null ? `${a.build_time}s` : "—"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
+                        </div>
+                      )}
+
+                      {/* Per-app App Validity drilldown — collapsed test list per app */}
+                      {(run.apps_detail || []).some(a => Array.isArray(a.validity_tests) && a.validity_tests.length > 0) && (
+                        <div style={{ marginTop: "16px" }}>
+                          <div style={{ color: "#6c7086", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "600" }}>
+                            ⚡ App Validity Tests Per App
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                            {run.apps_detail.map((a, i) => {
+                              const tests = Array.isArray(a.validity_tests) ? a.validity_tests : [];
+                              if (tests.length === 0) return null;
+                              const passed = !!a.validity_passed;
+                              const score  = a.validity_score ?? 0;
+                              return (
+                                <div key={`val-${i}`} style={{
+                                  background: "#11111b",
+                                  border: "1px solid #313244",
+                                  borderRadius: "8px",
+                                  padding: "10px 12px",
+                                }}>
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                                    <div style={{ color: "#cdd6f4", fontSize: "12px", fontWeight: "700" }}>
+                                      {a.name || `App ${i + 1}`}
+                                    </div>
+                                    <span style={{
+                                      background:   passed ? "#1e3a2e" : "#3a1e1e",
+                                      color:        passed ? "#a6e3a1" : "#f38ba8",
+                                      borderRadius: "5px",
+                                      padding:      "1px 8px",
+                                      fontSize:     "11px",
+                                      fontWeight:   "700",
+                                    }}>
+                                      {passed ? `APP WORKS ✅ ${score}/7` : `APP BROKEN ❌ ${score}/7`}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                                    {tests.map(t => (
+                                      <span key={t.test_id} title={t.detail || ""} style={{
+                                        background:   t.passed ? "#1e3a2e" : "#3a1e1e",
+                                        color:        t.passed ? "#a6e3a1" : "#f38ba8",
+                                        borderRadius: "5px",
+                                        padding:      "2px 8px",
+                                        fontSize:     "10px",
+                                        fontWeight:   "600",
+                                      }}>
+                                        {t.passed ? "✅" : "❌"} #{t.test_id} {t.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                  {a.powered_by_physis === false && (
+                                    <div style={{
+                                      marginTop: "8px",
+                                      padding: "6px 10px",
+                                      background: "#3a1e1e",
+                                      border: "1px solid #f38ba8",
+                                      borderRadius: "6px",
+                                      color: "#f38ba8",
+                                      fontSize: "11px",
+                                      fontWeight: "700",
+                                    }}>
+                                      🚨 MISSING: Powered by Physis
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
 
@@ -332,10 +430,17 @@ export default function EcosystemMonitor({ batchId, onBack }) {
                               ))}
                             </div>
                           )}
-                          {run.marketplace_eligible && (
+                          {/* Marketplace gate now requires proof + validity + integration + every
+                              app's Powered-by-Physis badge. The backend already enforces this
+                              in marketplace_eligible; we belt-and-suspenders the same check
+                              here so the button doesn't flash if the backend lags. */}
+                          {run.marketplace_eligible
+                              && run.validity_passed
+                              && run.all_powered_by_physis
+                              && run.integration_passed && (
                             <div style={{ marginTop: "14px", display: "flex", alignItems: "center", gap: "10px" }}>
                               <span style={{ background: "#1e3a2e", color: "#a6e3a1", borderRadius: "6px", padding: "3px 10px", fontSize: "11px", fontWeight: "700" }}>
-                                ✓ Marketplace Eligible
+                                ✓ Marketplace Eligible · Proof + Validity + Integration
                               </span>
                               <button
                                 type="button"
@@ -344,6 +449,24 @@ export default function EcosystemMonitor({ batchId, onBack }) {
                               >
                                 ✓ Approve Ecosystem for Marketplace
                               </button>
+                            </div>
+                          )}
+                          {/* If integration passed but validity / Powered-by-Physis didn't,
+                              show why approval is blocked so testers can see at a glance. */}
+                          {run.integration_passed && !(run.validity_passed && run.all_powered_by_physis) && (
+                            <div style={{
+                              marginTop: "12px",
+                              padding: "8px 12px",
+                              background: "#3a2a1e",
+                              border: "1px solid #fab387",
+                              borderRadius: "6px",
+                              color: "#fab387",
+                              fontSize: "11px",
+                              fontWeight: "600",
+                            }}>
+                              Approval blocked:
+                              {!run.validity_passed       && " validity below threshold"}
+                              {!run.all_powered_by_physis && " · one or more apps missing Powered by Physis"}
                             </div>
                           )}
                         </div>

@@ -41,6 +41,16 @@ class Run(Base):
     physis_response = Column(Text, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
+    # ── App-validity tests (30–36) — run after the 21 proof tests on every
+    # build that produced a live_url. validity_tests holds the 7 per-test
+    # dicts as JSON. app_works mirrors validity_passed (score >= 5) and
+    # powered_by_physis specifically tracks Test 35, the non-negotiable
+    # "Powered by Physis" badge gate that marketplace eligibility requires.
+    validity_score      = Column(Integer, default=0)
+    validity_passed     = Column(Boolean, default=False)
+    validity_tests      = Column(Text, nullable=True)
+    app_works           = Column(Boolean, default=False)
+    powered_by_physis   = Column(Boolean, default=False)
     batch = relationship("Batch", back_populates="runs")
     scenario = relationship("Scenario", back_populates="runs")
 
@@ -142,6 +152,15 @@ class EcosystemRun(Base):
     integration_passed    = Column(Boolean, default=False)
     integration_results   = Column(Text, nullable=True)           # JSON array of per-test dicts
     integration_details   = Column(Text, nullable=True)           # Short human summary
+    # ── Per-app validity (tests 30–36) aggregated across the ecosystem.
+    # validity_score is the average of each app's validity_score (0–7).
+    # validity_passed is True only when EVERY app scored >= 5.
+    # all_powered_by_physis is True only when EVERY app passed Test 35.
+    # The per-app validity dicts live inside apps_detail JSON; these
+    # columns are the roll-up the dashboard reads first.
+    validity_score        = Column(Integer, default=0)
+    validity_passed       = Column(Boolean, default=False)
+    all_powered_by_physis = Column(Boolean, default=False)
     # Only true when every app passed its individual tests AND integration_score == 8
     marketplace_eligible  = Column(Boolean, default=False)
     created_at            = Column(DateTime, default=datetime.utcnow)

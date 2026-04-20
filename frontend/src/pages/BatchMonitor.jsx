@@ -187,10 +187,13 @@ export default function BatchMonitor({ batchId, onBack }) {
                   </span>
                 )}
 
-                {/* Approve button — only shown on passed builds that produced a
-                    live URL. Score ≥ 80 is not tracked in Run today, so a
-                    green/live_url run is our strongest available proxy. */}
-                {run.status === "passed" && run.live_url && (
+                {/* Approve button — passed proof + live_url are required;
+                    validity + Powered-by-Physis (Test 35) gate is enforced
+                    below in the AppValidityPanel rendering. */}
+                {run.status === "passed"
+                    && run.live_url
+                    && run.validity_passed
+                    && run.powered_by_physis && (
                   <button
                     type="button"
                     onClick={() => setApproveRun(run)}
@@ -210,6 +213,26 @@ export default function BatchMonitor({ batchId, onBack }) {
                   </button>
                 )}
               </div>
+            ))}
+            {/* App Validity panels — rendered below the row so the run
+                table stays scannable. Surfaces the 7 tests + the strict
+                "Powered by Physis" alert when Test 35 fails. */}
+            {batch.runs.some(r => r.live_url) && (
+              <div style={{
+                padding: "16px 20px",
+                borderTop: "1px solid #181825",
+                background: "#11111b",
+                color: "#6c7086",
+                fontSize: "11px",
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                fontWeight: "700",
+              }}>
+                App Validity Per Run · 21 Proof Tests + 7 Validity Tests = 28 Total
+              </div>
+            )}
+            {batch.runs.filter(r => r.live_url).map(run => (
+              <AppValidityPanel key={`val-${run.run_id}`} run={run} />
             ))}
           </div>
         )}
@@ -231,3 +254,103 @@ const backBtn = {
   cursor: "pointer",
   fontSize: "13px",
 };
+
+
+// ─── App Validity panel — tests 30-36 results for a single run ────────────
+// Renders below each run row in BatchMonitor. Shows the 7 tests with
+// pass/fail dots, an APP WORKS / APP BROKEN summary badge, the missing-
+// Powered-by-Physis red alert when Test 35 fails, and the combined
+// proof + validity = 28 score line.
+function AppValidityPanel({ run }) {
+  const tests   = Array.isArray(run.validity_tests) ? run.validity_tests : [];
+  const score   = run.validity_score ?? 0;
+  const passed  = !!run.validity_passed;
+  const powered = !!run.powered_by_physis;
+  const missingBadge = tests.length > 0 && !powered;
+
+  return (
+    <div style={{
+      padding: "14px 20px 18px 20px",
+      borderBottom: "1px solid #181825",
+      background: "#11111b",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px", flexWrap: "wrap" }}>
+        <div style={{ color: "#cdd6f4", fontSize: "13px", fontWeight: "700" }}>
+          ⚡ App Validity Tests · Run #{run.run_id}
+        </div>
+        <span style={{
+          background:   passed ? "#1e3a2e" : "#3a1e1e",
+          color:        passed ? "#a6e3a1" : "#f38ba8",
+          borderRadius: "6px",
+          padding:      "2px 10px",
+          fontSize:     "11px",
+          fontWeight:   "700",
+        }}>
+          {passed ? `APP WORKS ✅ ${score}/7` : `APP BROKEN ❌ ${score}/7`}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ background: "#181825", borderRadius: "6px", height: "6px", marginBottom: "10px", overflow: "hidden" }}>
+        <div style={{
+          background: passed ? "#a6e3a1" : (score > 0 ? "#f9e2af" : "#f38ba8"),
+          width:      `${(score / 7) * 100}%`,
+          height:     "100%",
+          transition: "width 0.4s ease",
+        }} />
+      </div>
+
+      {tests.length === 0 ? (
+        <div style={{ color: "#6c7086", fontSize: "12px" }}>
+          Validity tests not yet run for this build.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          {tests.map(t => (
+            <div key={t.test_id} style={{
+              fontSize: "12px",
+              lineHeight: 1.5,
+              color: t.passed ? "#a6e3a1" : "#f38ba8",
+            }}>
+              <span style={{ fontFamily: "monospace", marginRight: "6px" }}>
+                {t.passed ? "✅" : "❌"}
+              </span>
+              <span style={{ color: "#cdd6f4", fontWeight: "600" }}>
+                #{t.test_id} {t.name}
+              </span>
+              {!t.passed && t.detail && (
+                <div style={{ color: "#f38ba8", fontSize: "11px", marginLeft: "24px", marginTop: "2px" }}>
+                  {t.detail}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {missingBadge && (
+        <div style={{
+          marginTop: "10px",
+          padding: "8px 12px",
+          background: "#3a1e1e",
+          border: "1px solid #f38ba8",
+          borderRadius: "6px",
+          color: "#f38ba8",
+          fontSize: "12px",
+          fontWeight: "700",
+        }}>
+          🚨 MISSING: Powered by Physis — never acceptable for marketplace
+        </div>
+      )}
+
+      <div style={{
+        marginTop: "10px",
+        color: "#6c7086",
+        fontSize: "11px",
+        letterSpacing: "0.04em",
+      }}>
+        21 Proof Tests + 7 Validity Tests = 28 Total
+      </div>
+    </div>
+  );
+}

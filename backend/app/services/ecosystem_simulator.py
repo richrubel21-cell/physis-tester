@@ -241,13 +241,16 @@ async def _poll_build_status(build_id: str) -> dict:
 async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -> dict:
     """
     Build one planned app. Returns a per-app result dict suitable for the
-    EcosystemRun.apps_detail JSON array.
+    EcosystemRun.apps_detail JSON array. Once the app deploys we also run
+    the 7 app-validity tests (30–36) so per-app reliability data is
+    captured at the moment of build, not after the fact.
     """
     payload  = _build_payload_for_app(app, user_id, join_ecosystem)
     started  = time.time()
 
     posted = await _post_build(payload)
     if not posted["ok"]:
+        empty_validity = run_validity_tests_blank("Build did not start, no live URL to test")
         return {
             "name":       app.get("name"),
             "purpose":    app.get("purpose"),
@@ -258,10 +261,22 @@ async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -
             "live_url":   None,
             "build_time": round(time.time() - started, 2),
             "error":      posted.get("error"),
+            **empty_validity,
         }
 
     build_id = posted["build_id"]
     polled   = await _poll_build_status(build_id)
+    live_url = polled.get("live_url")
+
+    # Validity sweep — runs once we have a real live_url. Failures fold
+    # silently into 0/7 so a flaky deploy never crashes the simulator.
+    if live_url:
+        try:
+            validity = await run_validity_tests(live_url)
+        except Exception as exc:
+            validity = run_validity_tests_blank(f"Validity runner crashed: {exc}")
+    else:
+        validity = run_validity_tests_blank("No live URL produced, app not reachable")
 
     return {
         "name":       app.get("name"),
@@ -270,9 +285,10 @@ async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -
         "complexity": payload.get("complexity"),
         "build_id":   build_id,
         "status":     polled["status"],
-        "live_url":   polled.get("live_url"),
+        "live_url":   live_url,
         "build_time": polled.get("build_time"),
         "error":      polled.get("error"),
+        **validity,
     }
 
 
@@ -284,11 +300,30 @@ def _summarise_apps(apps_detail: list[dict]) -> dict:
     # See module docstring — ecosystem nav verification requires auth.
     # Until we have a real test user we conservatively mirror apps_deployed.
     apps_integrated = apps_deployed
+
+    # ── Validity roll-up (tests 30–36 on each deployed app) ───────────
+    # Average score across every app row (deployed or not — apps that
+    # failed to deploy contribute 0/7, which is the honest signal). All-
+    # apps-pass and all-apps-have-Powered-by-Physis are the strict gates
+    # the marketplace eligibility check downstream depends on.
+    if apps_detail:
+        scores = [int(a.get("validity_score") or 0) for a in apps_detail]
+        validity_score        = round(sum(scores) / len(apps_detail))
+        validity_passed       = all(bool(a.get("validity_passed")) for a in apps_detail)
+        all_powered_by_physis = all(bool(a.get("powered_by_physis")) for a in apps_detail)
+    else:
+        validity_score        = 0
+        validity_passed       = False
+        all_powered_by_physis = False
+
     return {
-        "apps_built":      apps_built,
-        "apps_deployed":   apps_deployed,
-        "apps_integrated": apps_integrated,
-        "app_urls":        app_urls,
+        "apps_built":            apps_built,
+        "apps_deployed":         apps_deployed,
+        "apps_integrated":       apps_integrated,
+        "app_urls":              app_urls,
+        "validity_score":        validity_score,
+        "validity_passed":       validity_passed,
+        "all_powered_by_physis": all_powered_by_physis,
     }
 
 
@@ -352,18 +387,21 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
             fail_reason = "one or more apps failed to deploy"
 
     return {
-        "status":             "passed" if passed else "failed",
-        "apps_planned":       len(apps),
-        "apps_built":         summary["apps_built"],
-        "apps_deployed":      summary["apps_deployed"],
-        "apps_integrated":    summary["apps_integrated"],
-        "passed":             passed,
-        "fail_reason":        fail_reason,
-        "total_time_seconds": round(time.time() - start, 2),
-        "app_urls":           summary["app_urls"],
-        "apps_detail":        apps_detail,
-        "apps_planned_json":  apps,
-        "error_message":      None,
+        "status":                "passed" if passed else "failed",
+        "apps_planned":          len(apps),
+        "apps_built":            summary["apps_built"],
+        "apps_deployed":         summary["apps_deployed"],
+        "apps_integrated":       summary["apps_integrated"],
+        "passed":                passed,
+        "fail_reason":           fail_reason,
+        "total_time_seconds":    round(time.time() - start, 2),
+        "app_urls":              summary["app_urls"],
+        "apps_detail":           apps_detail,
+        "apps_planned_json":     apps,
+        "error_message":         None,
+        "validity_score":        summary["validity_score"],
+        "validity_passed":       summary["validity_passed"],
+        "all_powered_by_physis": summary["all_powered_by_physis"],
     }
 
 
@@ -419,18 +457,21 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
             fail_reason = "sequential ecosystem build did not fully deploy"
 
     return {
-        "status":             "passed" if passed else "failed",
-        "apps_planned":       len(apps),
-        "apps_built":         summary["apps_built"],
-        "apps_deployed":      summary["apps_deployed"],
-        "apps_integrated":    summary["apps_integrated"],
-        "passed":             passed,
-        "fail_reason":        fail_reason,
-        "total_time_seconds": round(time.time() - start, 2),
-        "app_urls":           summary["app_urls"],
-        "apps_detail":        apps_detail,
-        "apps_planned_json":  apps,
-        "error_message":      None,
+        "status":                "passed" if passed else "failed",
+        "apps_planned":          len(apps),
+        "apps_built":            summary["apps_built"],
+        "apps_deployed":         summary["apps_deployed"],
+        "apps_integrated":       summary["apps_integrated"],
+        "passed":                passed,
+        "fail_reason":           fail_reason,
+        "total_time_seconds":    round(time.time() - start, 2),
+        "app_urls":              summary["app_urls"],
+        "apps_detail":           apps_detail,
+        "apps_planned_json":     apps,
+        "error_message":         None,
+        "validity_score":        summary["validity_score"],
+        "validity_passed":       summary["validity_passed"],
+        "all_powered_by_physis": summary["all_powered_by_physis"],
     }
 
 
@@ -731,3 +772,204 @@ async def run_integration_tests(ecosystem_apps: list[dict]) -> dict:
         "integration_passed":  passed,
         "integration_details": details,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App-validity tests (30–36) — run on every individual app AFTER it deploys.
+# These verify the app actually works (renders, has inputs, has outputs, etc.),
+# not merely that the build pipeline succeeded. Both single-app builds and
+# every app inside an ecosystem build use the same runner so the metrics
+# are directly comparable.
+#
+# Returned shape (per call to run_validity_tests):
+#   {
+#     validity_tests:    [ {test_id, name, passed, score, detail}, ... × 7 ],
+#     validity_score:    int (0..7),
+#     validity_passed:   bool (score >= 5),
+#     app_works:         bool (mirrors validity_passed),
+#     powered_by_physis: bool (Test 35 specifically — non-negotiable),
+#   }
+#
+# Score >= 5 (not 7) because some templates legitimately do not surface
+# every indicator in static HTML. Test 35 is tracked as its own boolean
+# so marketplace eligibility can require it even when overall validity
+# passes through the score threshold.
+# ─────────────────────────────────────────────────────────────────────────────
+
+VALIDITY_FETCH_TIMEOUT = 15
+
+VALIDITY_TEST_NAMES = [
+    (30, "UI Renders"),
+    (31, "React App Loaded"),
+    (32, "AI Engine Present"),
+    (33, "Input Form Exists"),
+    (34, "Output Display Exists"),
+    (35, "Powered by Physis Present"),
+    (36, "Mobile Responsive"),
+]
+
+
+def run_validity_tests_blank(reason: str) -> dict:
+    """Synthetic 0/7 result for builds we can't reach. Used when an app
+    failed to deploy or the validity runner itself crashed."""
+    tests = [
+        _test_result(tid, name, False, reason or "App not reachable")
+        for tid, name in VALIDITY_TEST_NAMES
+    ]
+    return {
+        "validity_tests":    tests,
+        "validity_score":    0,
+        "validity_passed":   False,
+        "app_works":         False,
+        "powered_by_physis": False,
+    }
+
+
+def _test_30_ui_renders(status_code: int, html: str) -> dict:
+    if status_code != 200:
+        return _test_result(30, "UI Renders", False, f"HTTP {status_code} — blank screen detected")
+    body = html or ""
+    stripped = body.strip()
+    if len(stripped) < 500:
+        return _test_result(30, "UI Renders", False, "Body under 500 chars — blank screen detected")
+    lower = stripped.lower()
+    if "application error" in lower or "internal server error" in lower or "<title>error" in lower:
+        return _test_result(30, "UI Renders", False, "Error page detected, not a real UI")
+    has_root = (
+        re.search(r'<div\s+[^>]*id\s*=\s*["\']root["\']', body, re.IGNORECASE) is not None
+        or "data-reactroot" in body.lower()
+        or "<body" in body.lower()
+    )
+    if not has_root:
+        return _test_result(30, "UI Renders", False, "No React root element found in HTML")
+    return _test_result(30, "UI Renders", True, "App renders correctly")
+
+
+def _test_31_react_app_loaded(html: str) -> dict:
+    body = html or ""
+    indicators = []
+    if re.search(r'<div\s+[^>]*id\s*=\s*["\']root["\']', body, re.IGNORECASE):
+        indicators.append("#root div")
+    if re.search(r'<script[^>]*type\s*=\s*["\']module["\']', body, re.IGNORECASE):
+        indicators.append("ES module script")
+    if re.search(r'\b(react|ReactDOM)\b', body):
+        indicators.append("react reference")
+    if re.search(r'/assets/index-[A-Za-z0-9_-]+\.js', body):
+        indicators.append("Vite bundle")
+    if indicators:
+        return _test_result(31, "React App Loaded", True, "React app detected: " + ", ".join(indicators))
+    return _test_result(31, "React App Loaded", False, "No React app found")
+
+
+def _test_32_ai_engine_present(html: str) -> dict:
+    body = html or ""
+    lower = body.lower()
+    indicators = [
+        ("useAI",       "useai"      in lower),
+        ("/api/ai",     "/api/ai"    in lower),
+        ("ai_engine",   "ai_engine"  in lower or "ai-engine" in lower),
+        ("askAI",       "askai"      in lower),
+        ("anthropic",   "anthropic"  in lower),
+    ]
+    found = [name for name, hit in indicators if hit]
+    if found:
+        return _test_result(32, "AI Engine Present", True, "AI engine detected: " + ", ".join(found))
+    return _test_result(32, "AI Engine Present", False, "No AI engine found")
+
+
+def _test_33_input_form_exists(html: str) -> dict:
+    body = html or ""
+    inputs    = len(re.findall(r"<input\b",    body, re.IGNORECASE))
+    textareas = len(re.findall(r"<textarea\b", body, re.IGNORECASE))
+    selects   = len(re.findall(r"<select\b",   body, re.IGNORECASE))
+    total = inputs + textareas + selects
+    if total == 0:
+        # Vite/React often ship inputs only after JS hydrates. Fall back
+        # to looking for placeholder= or input-type attribute strings in
+        # the bundled JS payload.
+        attr_hits = re.findall(
+            r'(placeholder\s*=|type\s*=\s*["\'](?:text|number|date|email|password)["\'])',
+            body, re.IGNORECASE,
+        )
+        if attr_hits:
+            return _test_result(33, "Input Form Exists", True, f"Input form detected ({len(attr_hits)} input attributes)")
+        return _test_result(33, "Input Form Exists", False, "No input form found")
+    return _test_result(33, "Input Form Exists", True, f"Input form detected ({total} inputs)")
+
+
+def _test_34_output_display_exists(html: str) -> dict:
+    body = html or ""
+    keywords = ("output", "result", "response", "answer", "analysis", "generated")
+    pattern = re.compile(
+        r'(?:class|id)\s*=\s*["\'][^"\']*\b(?:' + "|".join(keywords) + r')\b[^"\']*["\']',
+        re.IGNORECASE,
+    )
+    if pattern.search(body):
+        return _test_result(34, "Output Display Exists", True, "Output display detected")
+    # Fallback: any of the keywords appears as plain text near a content
+    # container (rendered string in the bundle).
+    lower = body.lower()
+    keyword_hits = sum(1 for k in keywords if k in lower)
+    if keyword_hits >= 2:
+        return _test_result(34, "Output Display Exists", True, f"Output display detected ({keyword_hits} indicator words)")
+    return _test_result(34, "Output Display Exists", False, "No output display found")
+
+
+def _test_35_powered_by_physis(html: str) -> dict:
+    body  = html or ""
+    lower = body.lower()
+    if "powered by physis" in lower or "powered-by-physis" in lower:
+        return _test_result(35, "Powered by Physis Present", True, "Powered by Physis badge found")
+    return _test_result(35, "Powered by Physis Present", False, "MISSING: Powered by Physis badge")
+
+
+def _test_36_mobile_responsive(html: str) -> dict:
+    body = html or ""
+    has_viewport = re.search(
+        r'<meta[^>]*name\s*=\s*["\']viewport["\'][^>]*content\s*=\s*["\'][^"\']*width\s*=\s*device-width',
+        body, re.IGNORECASE,
+    ) is not None
+    if has_viewport:
+        return _test_result(36, "Mobile Responsive", True, "Mobile responsive (viewport meta tag found)")
+    if re.search(r'(@media|max-width\s*:|min-width\s*:)', body, re.IGNORECASE):
+        return _test_result(36, "Mobile Responsive", True, "Mobile responsive (responsive CSS detected)")
+    return _test_result(36, "Mobile Responsive", False, "Not mobile responsive — no viewport meta tag")
+
+
+async def run_validity_tests(live_url):
+    """
+    Run the 7 app-validity tests (30–36) against a single deployed app.
+    Fetches live_url ONCE and shares the response across every test.
+    Returns the validity dict shape documented at the top of this section.
+    """
+    if not live_url:
+        return run_validity_tests_blank("No live URL provided")
+
+    try:
+        async with httpx.AsyncClient(timeout=VALIDITY_FETCH_TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(live_url)
+        status_code = resp.status_code
+        html        = resp.text or ""
+    except Exception as exc:
+        return run_validity_tests_blank(f"Could not fetch live URL: {exc}")
+
+    tests = [
+        _test_30_ui_renders(status_code, html),
+        _test_31_react_app_loaded(html),
+        _test_32_ai_engine_present(html),
+        _test_33_input_form_exists(html),
+        _test_34_output_display_exists(html),
+        _test_35_powered_by_physis(html),
+        _test_36_mobile_responsive(html),
+    ]
+    score             = sum(t["score"] for t in tests)
+    powered_by_physis = bool(next((t for t in tests if t["test_id"] == 35), {}).get("passed"))
+    validity_passed   = score >= 5
+    return {
+        "validity_tests":    tests,
+        "validity_score":    score,
+        "validity_passed":   validity_passed,
+        "app_works":         validity_passed,
+        "powered_by_physis": powered_by_physis,
+    }
+

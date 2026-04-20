@@ -148,10 +148,25 @@ def _finalize_run_row(run_id: int, result: dict) -> None:
             run.integration_results  = json.dumps(result.get("integration_tests")   or [])
             run.integration_details  = (result.get("integration_details") or "")[:500] or None
 
-            # Marketplace eligibility — the ecosystem only becomes marketplace-eligible
-            # when every individual app deployed AND all 8 integration tests passed.
+            # App-validity roll-up (tests 30–36). The per-app dicts live
+            # inside apps_detail; these columns are the dashboard-facing
+            # aggregate. Wrapped in getattr so older DBs missing the
+            # columns (before the startup migration ran) don't blow up.
+            try:
+                run.validity_score        = int(result.get("validity_score") or 0)
+                run.validity_passed       = bool(result.get("validity_passed") or False)
+                run.all_powered_by_physis = bool(result.get("all_powered_by_physis") or False)
+            except Exception as exc:
+                print(f"[ecosystem] validity write skipped (run {run_id}): {exc}")
+
+            # Marketplace eligibility — every individual app deployed AND
+            # all 8 integration tests passed AND every app passed validity
+            # AND every app has the Powered-by-Physis badge.
             run.marketplace_eligible = bool(
-                result.get("passed") and result.get("integration_passed")
+                result.get("passed")
+                and result.get("integration_passed")
+                and result.get("validity_passed")
+                and result.get("all_powered_by_physis")
             )
 
             run.completed_at       = datetime.utcnow()
@@ -348,29 +363,33 @@ def _serialize_run(run: EcosystemRun) -> dict:
             return []
 
     return {
-        "run_id":               run.id,
-        "business_description": run.business_description,
-        "app_count":            run.app_count,
-        "type":                 run.type,
-        "status":               run.status,
-        "apps_planned":         run.apps_planned,
-        "apps_built":           run.apps_built,
-        "apps_deployed":        run.apps_deployed,
-        "apps_integrated":      run.apps_integrated,
-        "passed":               run.passed,
-        "fail_reason":          run.fail_reason,
-        "total_time_seconds":   run.total_time_seconds,
-        "app_urls":             _decode(run.app_urls),
-        "apps_detail":          _decode(run.apps_detail),
-        "apps_planned_json":    _decode(run.apps_planned_json),
-        "error_message":        run.error_message,
-        "integration_score":    getattr(run, "integration_score",  0) or 0,
-        "integration_passed":   bool(getattr(run, "integration_passed", False)),
-        "integration_tests":    _decode(getattr(run, "integration_results", None)),
-        "integration_details":  getattr(run, "integration_details", None),
-        "marketplace_eligible": bool(getattr(run, "marketplace_eligible", False)),
-        "created_at":           run.created_at.isoformat() if run.created_at else None,
-        "completed_at":         run.completed_at.isoformat() if run.completed_at else None,
+        "run_id":                 run.id,
+        "business_description":   run.business_description,
+        "app_count":              run.app_count,
+        "type":                   run.type,
+        "status":                 run.status,
+        "apps_planned":           run.apps_planned,
+        "apps_built":             run.apps_built,
+        "apps_deployed":          run.apps_deployed,
+        "apps_integrated":        run.apps_integrated,
+        "passed":                 run.passed,
+        "fail_reason":            run.fail_reason,
+        "total_time_seconds":     run.total_time_seconds,
+        "app_urls":               _decode(run.app_urls),
+        "apps_detail":            _decode(run.apps_detail),
+        "apps_planned_json":      _decode(run.apps_planned_json),
+        "error_message":          run.error_message,
+        "integration_score":      getattr(run, "integration_score",  0) or 0,
+        "integration_passed":     bool(getattr(run, "integration_passed", False)),
+        "integration_tests":      _decode(getattr(run, "integration_results", None)),
+        "integration_details":    getattr(run, "integration_details", None),
+        # App-validity aggregate (tests 30–36 averaged across every app)
+        "validity_score":         int(getattr(run, "validity_score", 0) or 0),
+        "validity_passed":        bool(getattr(run, "validity_passed", False)),
+        "all_powered_by_physis":  bool(getattr(run, "all_powered_by_physis", False)),
+        "marketplace_eligible":   bool(getattr(run, "marketplace_eligible", False)),
+        "created_at":             run.created_at.isoformat() if run.created_at else None,
+        "completed_at":           run.completed_at.isoformat() if run.completed_at else None,
     }
 
 
