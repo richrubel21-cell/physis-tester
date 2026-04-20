@@ -53,6 +53,23 @@ def update_run(db: Session, run_id: int, sim_result: dict) -> Run:
     run.live_url = sim_result["live_url"]
     run.error_message = sim_result["error_message"]
     run.physis_response = sim_result["physis_response"]
+
+    # Validity columns (tests 30–36). Use .get() so callers that pre-date
+    # the validity sweep still work — the columns just stay at their
+    # default 0/False/None values for those legacy callers.
+    if "validity_score" in sim_result:
+        try:
+            run.validity_score    = int(sim_result.get("validity_score") or 0)
+            run.validity_passed   = bool(sim_result.get("validity_passed") or False)
+            run.validity_tests    = sim_result.get("validity_tests")  # already a JSON string
+            run.app_works         = bool(sim_result.get("app_works") or False)
+            run.powered_by_physis = bool(sim_result.get("powered_by_physis") or False)
+        except Exception as exc:
+            # New columns absent in this DB (startup migration didn't run
+            # yet, or different schema). Don't fail the whole update — the
+            # core build outcome still lands.
+            print(f"[run_service] validity write skipped (run {run_id}): {exc}")
+
     run.finished_at = datetime.utcnow()
     db.commit()
     db.refresh(run)

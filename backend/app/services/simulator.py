@@ -3,6 +3,11 @@ import json
 import random
 import time
 
+# Validity sweep — same 7 tests we run on every ecosystem app, now run on
+# every single-app build too once a live_url is available. Imported lazily
+# inside run_single() to avoid touching the import path if anything in
+# ecosystem_simulator breaks at import time.
+
 PHYSIS_BASE_URL = "https://physis.onrender.com"
 BUILD_TIMEOUT = 30
 STREAM_TIMEOUT = 120
@@ -60,6 +65,14 @@ async def run_single(description: str) -> dict:
         "live_url": None,
         "error_message": None,
         "physis_response": None,
+        # Validity defaults — overwritten by the validity sweep below if
+        # the build returns a live_url. Kept on every result so update_run
+        # can persist them without conditional checks.
+        "validity_score":     0,
+        "validity_passed":    False,
+        "validity_tests":     None,
+        "app_works":          False,
+        "powered_by_physis":  False,
     }
 
     start = time.time()
@@ -187,5 +200,28 @@ async def run_single(description: str) -> dict:
         result["status"] = "error"
         result["error_message"] = f"Unexpected error: {str(e)}"
         result["build_time_seconds"] = round(time.time() - start, 2)
+
+    # Validity sweep (tests 30–36). Runs on every build that produced a
+    # live_url, regardless of which return path put it there. Failures
+    # here never overwrite the build status — the most we do is record
+    # 0/7 if the validity runner itself crashes.
+    if result.get("live_url"):
+        try:
+            from .ecosystem_simulator import run_validity_tests
+            validity = await run_validity_tests(result["live_url"])
+        except Exception as exc:
+            try:
+                from .ecosystem_simulator import run_validity_tests_blank
+                validity = run_validity_tests_blank(f"Validity runner crashed: {exc}")
+            except Exception:
+                validity = None
+        if validity:
+            result["validity_score"]    = int(validity.get("validity_score") or 0)
+            result["validity_passed"]   = bool(validity.get("validity_passed"))
+            # validity_tests is stored as a JSON string so the Run.validity_tests
+            # Text column receives a directly persistable value.
+            result["validity_tests"]    = json.dumps(validity.get("validity_tests") or [])
+            result["app_works"]         = bool(validity.get("app_works"))
+            result["powered_by_physis"] = bool(validity.get("powered_by_physis"))
 
     return result
