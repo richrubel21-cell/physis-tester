@@ -862,14 +862,23 @@ def _test_31_react_app_loaded(html: str) -> dict:
 
 
 def _test_32_ai_engine_present(html: str) -> dict:
+    """Test 32 — verify the deployed app talks to an AI engine.
+    Allowlist matches the Physis platform's actual conventions:
+    template_engine.py hardcodes /generate as the canonical backend
+    endpoint every generated frontend POSTs to (line 473), so /generate
+    and /api/generate are first-class indicators. The legacy useAI /
+    askAI / ai_engine / anthropic markers stay for bespoke apps + the
+    chapters / mary surfaces."""
     body = html or ""
     lower = body.lower()
     indicators = [
-        ("useAI",       "useai"      in lower),
-        ("/api/ai",     "/api/ai"    in lower),
-        ("ai_engine",   "ai_engine"  in lower or "ai-engine" in lower),
-        ("askAI",       "askai"      in lower),
-        ("anthropic",   "anthropic"  in lower),
+        ("/generate",     "/generate"     in lower),
+        ("/api/generate", "/api/generate" in lower),
+        ("useAI",         "useai"         in lower),
+        ("/api/ai",       "/api/ai"       in lower),
+        ("ai_engine",     "ai_engine"     in lower or "ai-engine" in lower),
+        ("askAI",         "askai"         in lower),
+        ("anthropic",     "anthropic"     in lower),
     ]
     found = [name for name, hit in indicators if hit]
     if found:
