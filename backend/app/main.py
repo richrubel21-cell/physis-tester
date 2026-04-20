@@ -7,6 +7,7 @@ from .routes import scenarios, simulator, runs, analytics, orchestrator, product
 from .routes.mary import router as mary_router
 from .routes.ecosystem import router as ecosystem_router
 from .routes.functional import router as functional_router
+from .routes.admin import router as admin_router, cleanup_orphans_at_startup
 
 Base.metadata.create_all(bind=engine)
 
@@ -132,6 +133,17 @@ app.include_router(products.router)
 app.include_router(mary_router)
 app.include_router(ecosystem_router)
 app.include_router(functional_router)
+app.include_router(admin_router)
+
+
+# Orphaned-batch janitor. A batch in 'running' that survives a worker
+# restart (redeploy mid-run) stays 'running' forever without this — the
+# dashboard then shows perpetually-active batches that never reconcile.
+# Runs once on every boot so a redeploy auto-recovers anything orphaned
+# by the deploy that died.
+@app.on_event("startup")
+def _startup_cleanup_orphans():
+    cleanup_orphans_at_startup()
 
 
 # Browser cleanup on shutdown so a uvicorn restart doesn't orphan the

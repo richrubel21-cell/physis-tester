@@ -16,3 +16,10 @@ services:
         sync: false
       - key: PHYSIS_TEST_USER_TOKEN
         sync: false
+      # Bearer token guarding /admin/cleanup-orphans. Fail-closed: when
+      # unset, the endpoint refuses every request with 503 (set in the
+      # Render dashboard to a long random string to enable manual
+      # cleanup). The startup hook runs the same cleanup automatically
+      # on every boot regardless of this token.
+      - key: TESTER_ADMIN_TOKEN
+        sync: false
