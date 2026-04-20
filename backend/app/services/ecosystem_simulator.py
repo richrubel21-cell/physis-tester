@@ -377,14 +377,7 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
         apps_detail.append(detail)
 
     summary = _summarise_apps(apps_detail)
-    passed  = summary["apps_deployed"] == len(apps)
-    fail_reason = None
-    if not passed:
-        first_fail = next((a for a in apps_detail if not a.get("live_url")), None)
-        if first_fail:
-            fail_reason = f"{first_fail.get('name')}: {first_fail.get('error') or 'no live URL'}"
-        else:
-            fail_reason = "one or more apps failed to deploy"
+    passed, fail_reason = _evaluate_ecosystem_pass(apps_detail, summary, len(apps))
 
     return {
         "status":                "passed" if passed else "failed",
@@ -403,6 +396,46 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
         "validity_passed":       summary["validity_passed"],
         "all_powered_by_physis": summary["all_powered_by_physis"],
     }
+
+
+def _evaluate_ecosystem_pass(apps_detail: list, summary: dict, planned_count: int):
+    """Phase B gate (Batch #22 follow-up) — an ecosystem only counts as
+    passed when ALL THREE conditions hold:
+      1. Every planned app deployed (live_url present)
+      2. Every app passed the validity sweep (validity_passed True)
+      3. Every app shipped the Powered by Physis badge (all_powered_by_physis True)
+
+    Returns (passed: bool, fail_reason: Optional[str]). The fail_reason
+    explains the FIRST failing condition in priority order — deploy
+    failures shadow validity failures shadow badge failures, so the
+    reason matches the first thing the user needs to fix."""
+    deployed_ok = summary["apps_deployed"] == planned_count
+    validity_ok = bool(summary.get("validity_passed"))
+    badge_ok    = bool(summary.get("all_powered_by_physis"))
+    passed = deployed_ok and validity_ok and badge_ok
+
+    if passed:
+        return True, None
+
+    if not deployed_ok:
+        first_fail = next((a for a in apps_detail if not a.get("live_url")), None)
+        if first_fail:
+            return False, f"{first_fail.get('name')}: {first_fail.get('error') or 'no live URL'}"
+        return False, "one or more apps failed to deploy"
+
+    if not validity_ok:
+        bad_apps = [a.get("name") or "(unnamed)"
+                    for a in apps_detail
+                    if a.get("live_url") and not a.get("validity_passed")]
+        return False, f"Validity sweep failed for: {', '.join(bad_apps[:3])}"
+
+    if not badge_ok:
+        no_badge = [a.get("name") or "(unnamed)"
+                    for a in apps_detail
+                    if a.get("live_url") and not a.get("powered_by_physis")]
+        return False, f"Missing Powered by Physis badge on: {', '.join(no_badge[:3])}"
+
+    return False, "ecosystem failed an unspecified gate"
 
 
 async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
@@ -447,14 +480,13 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
         apps_detail.append(detail)
 
     summary = _summarise_apps(apps_detail)
-    passed  = summary["apps_deployed"] == len(apps)
-    fail_reason = None
-    if not passed:
-        first_fail = next((a for a in apps_detail if not a.get("live_url")), None)
-        if first_fail:
-            fail_reason = f"{first_fail.get('name')}: {first_fail.get('error') or 'no live URL'}"
-        else:
-            fail_reason = "sequential ecosystem build did not fully deploy"
+    passed, fail_reason = _evaluate_ecosystem_pass(apps_detail, summary, len(apps))
+    # Sequential mode's pre-Phase-B fallback message was distinct ("did
+    # not fully deploy" vs "one or more apps failed to deploy"). The
+    # shared helper uses the latter; preserving the original wording
+    # only when the no-explicit-failure branch fires.
+    if not passed and fail_reason == "one or more apps failed to deploy":
+        fail_reason = "sequential ecosystem build did not fully deploy"
 
     return {
         "status":                "passed" if passed else "failed",

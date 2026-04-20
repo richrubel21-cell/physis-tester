@@ -242,9 +242,12 @@ async def run_single(description: str) -> dict:
         result["build_time_seconds"] = round(time.time() - start, 2)
 
     # Validity sweep (tests 30–36). Runs on every build that produced a
-    # live_url, regardless of which return path put it there. Failures
-    # here never overwrite the build status — the most we do is record
-    # 0/7 if the validity runner itself crashes.
+    # live_url. Phase B (Batch #22 follow-up): the validity sweep now
+    # GATES the run's overall status — a deploy that landed a live URL
+    # but failed the validity sweep is no longer counted as "passed",
+    # because that's exactly the situation that produced the Run #58
+    # vs Batch #22 mismatch ("APP BROKEN 0/7" inside a 5/5-passed
+    # batch). Yes this lowers historical pass rates; that's the point.
     if result.get("live_url"):
         try:
             from .ecosystem_simulator import run_validity_tests
@@ -263,5 +266,15 @@ async def run_single(description: str) -> dict:
             result["validity_tests"]    = json.dumps(validity.get("validity_tests") or [])
             result["app_works"]         = bool(validity.get("app_works"))
             result["powered_by_physis"] = bool(validity.get("powered_by_physis"))
+
+        # Phase B gate — runs only when status was "passed" coming in
+        # (i.e. the build actually produced a live_url). validity_passed
+        # absent or False downgrades. Deploy-failed runs are unaffected.
+        if result.get("status") == "passed" and not result.get("validity_passed"):
+            result["status"] = "failed"
+            score = result.get("validity_score") or 0
+            result["error_message"] = (
+                f"Validity sweep failed (score {score}/7 — see validity_tests for details)"
+            )
 
     return result
