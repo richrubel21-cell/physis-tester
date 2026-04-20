@@ -982,9 +982,20 @@ def _test_32_ai_engine_present(html: str) -> dict:
         ("anthropic",     "anthropic"     in lower),
     ]
     found = [name for name, hit in indicators if hit]
+    # Diagnostic fingerprint — proves THIS function is the one that
+    # actually ran on the live container. If a future failure detail
+    # is missing the [v2-allowlist-check ran] tag we know there's
+    # another Test 32 implementation elsewhere being invoked instead.
+    fingerprint = "[v2-allowlist-check ran]"
     if found:
-        return _test_result(32, "AI Engine Present", True, "AI engine detected: " + ", ".join(found))
-    return _test_result(32, "AI Engine Present", False, "No AI engine found")
+        return _test_result(
+            32, "AI Engine Present", True,
+            f"AI engine detected: {', '.join(found)} {fingerprint}",
+        )
+    return _test_result(
+        32, "AI Engine Present", False,
+        f"No AI engine found {fingerprint}",
+    )
 
 
 def _test_33_input_form_exists(html: str) -> dict:
