@@ -56,6 +56,16 @@ BASE_PAYLOAD = {
     "teach_ai_skipped":    True,
     "teach_ai_summary":    "",
     "join_ecosystem":      False,
+
+    # T&C is enforced server-side on /build (security hardening — the
+    # checkbox in the real questionnaire UI is just a UI gate; the
+    # backend rejects with 400 if terms_accepted isn't True). The tester
+    # is an internal test harness running against a staging-equivalent
+    # endpoint, so it auto-accepts on every simulated build. Both the
+    # single-app run_single() and ecosystem _build_payload_for_app()
+    # spread BASE_PAYLOAD into their POST body, so this single source
+    # of truth covers both pipelines.
+    "terms_accepted":      True,
 }
 
 async def run_single(description: str) -> dict:
