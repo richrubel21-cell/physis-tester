@@ -54,6 +54,16 @@ def update_run(db: Session, run_id: int, sim_result: dict) -> Run:
     run.error_message = sim_result["error_message"]
     run.physis_response = sim_result["physis_response"]
 
+    # Proof score (tests_passed) — captured by simulator from the SSE
+    # final event or the /status fallback. Wrapped separately from the
+    # validity block so a missing proof_score column doesn't drop the
+    # validity write.
+    if "proof_score" in sim_result:
+        try:
+            run.proof_score = int(sim_result.get("proof_score") or 0)
+        except Exception as exc:
+            print(f"[run_service] proof_score write skipped (run {run_id}): {exc}")
+
     # Validity columns (tests 30–36). Use .get() so callers that pre-date
     # the validity sweep still work — the columns just stay at their
     # default 0/False/None values for those legacy callers.

@@ -20,6 +20,7 @@ def _ensure_columns():
     inspector = inspect(engine)
     plans = [
         ("runs", [
+            ("proof_score",        "INTEGER DEFAULT 0"),
             ("validity_score",     "INTEGER DEFAULT 0"),
             ("validity_passed",    "BOOLEAN DEFAULT 0"),
             ("validity_tests",     "TEXT"),

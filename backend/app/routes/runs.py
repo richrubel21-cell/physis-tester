@@ -1,4 +1,5 @@
 import asyncio
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -71,18 +72,44 @@ def get_batch_status(batch_id: int, db: Session = Depends(get_db)):
         "finished_at": batch.finished_at.isoformat() if batch.finished_at else None,
         "runs": [
             {
-                "run_id": r.id,
-                "description": r.description,
-                "status": r.status,
+                "run_id":             r.id,
+                "description":        r.description,
+                "status":             r.status,
                 "build_time_seconds": r.build_time_seconds,
-                "live_url": r.live_url,
-                "error_message": r.error_message,
-                "started_at": r.started_at.isoformat(),
-                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "live_url":           r.live_url,
+                "error_message":      r.error_message,
+                "started_at":         r.started_at.isoformat(),
+                "finished_at":        r.finished_at.isoformat() if r.finished_at else None,
+                # Proof score (tests_passed / 21) gates Promote-to-Template.
+                # Defaulted via getattr so older DBs missing the column still
+                # serialize cleanly.
+                "proof_score":        int(getattr(r, "proof_score", 0) or 0),
+                # Validity sweep (tests 30–36). validity_tests is stored as
+                # a JSON string; surface it as a parsed list so the
+                # AppValidityPanel renders correctly.
+                "validity_score":     int(getattr(r, "validity_score", 0) or 0),
+                "validity_passed":    bool(getattr(r, "validity_passed", False)),
+                "validity_tests":     _decode_validity_tests(getattr(r, "validity_tests", None)),
+                "app_works":          bool(getattr(r, "app_works", False)),
+                "powered_by_physis":  bool(getattr(r, "powered_by_physis", False)),
             }
             for r in runs
         ]
     }
+
+
+def _decode_validity_tests(raw):
+    """validity_tests is persisted as a JSON string; the frontend
+    expects an array of test dicts. Defensive decode for any caller."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
 
 @router.get("/")
 def list_batches(db: Session = Depends(get_db)):

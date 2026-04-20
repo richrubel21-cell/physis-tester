@@ -41,6 +41,11 @@ class Run(Base):
     physis_response = Column(Text, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
+    # ── Proof score — number of the 21 Physis proof tests that passed
+    # for this build, captured from the SSE final event's tests_passed
+    # field. Promote-to-Template requires >= 18 alongside the validity
+    # gate below.
+    proof_score         = Column(Integer, default=0)
     # ── App-validity tests (30–36) — run after the 21 proof tests on every
     # build that produced a live_url. validity_tests holds the 7 per-test
     # dicts as JSON. app_works mirrors validity_passed (score >= 5) and

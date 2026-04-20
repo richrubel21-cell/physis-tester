@@ -65,6 +65,10 @@ async def run_single(description: str) -> dict:
         "live_url": None,
         "error_message": None,
         "physis_response": None,
+        # Proof score (tests_passed) read off the SSE final event or the
+        # /status response. 0 means "not captured" — Promote-to-Template
+        # gates on >= 18 so an unset proof_score keeps the button hidden.
+        "proof_score":        0,
         # Validity defaults — overwritten by the validity sweep below if
         # the build returns a live_url. Kept on every result so update_run
         # can persist them without conditional checks.
@@ -140,6 +144,22 @@ async def run_single(description: str) -> dict:
             result["physis_response"] = json.dumps(sse_events[-5:]) if sse_events else None
             return result
 
+        # Walk the SSE events newest-first looking for the final stage
+        # event Physis emits (it carries tests_passed / tests_total). The
+        # first one we find with tests_passed wins; this becomes the
+        # Promote-to-Template proof_score gate.
+        for raw in reversed(sse_events):
+            try:
+                ev = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            tp = ev.get("tests_passed")
+            if isinstance(tp, int) and tp > 0:
+                result["proof_score"] = tp
+                break
+
         # Step 3: Poll /status for the final result
         status_url = f"{PHYSIS_BASE_URL}/build/{build_id}/status"
         try:
@@ -168,6 +188,16 @@ async def run_single(description: str) -> dict:
 
                     elapsed = round(time.time() - start, 2)
                     result["build_time_seconds"] = elapsed
+
+                    # Fallback proof_score capture from /status — the SSE
+                    # walk above is the primary source, but if the stream
+                    # was cut short the final event lives on /status as
+                    # last_event with the same tests_passed shape.
+                    if not result.get("proof_score"):
+                        last_ev = status_data.get("last_event") or {}
+                        tp = last_ev.get("tests_passed") if isinstance(last_ev, dict) else None
+                        if isinstance(tp, int) and tp > 0:
+                            result["proof_score"] = tp
 
                     if live_url:
                         result["status"] = "passed"
