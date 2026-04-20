@@ -1,7 +1,19 @@
 import httpx
 import json
+import logging
 import random
 import time
+
+# Module-level logger. Uvicorn's default logging config captures
+# anything at INFO+ and ships it to stdout with timestamps, so these
+# lines land in Render's log viewer without extra setup. Greppable
+# prefix per line: physis_tester.app.services.simulator.
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    # Uvicorn already attaches its own handler in production; the
+    # explicit setLevel is here so dev runs (python -m pytest, repl)
+    # also surface our INFO lines without needing logging.basicConfig.
+    logger.setLevel(logging.INFO)
 
 # Validity sweep — same 7 tests we run on every ecosystem app, now run on
 # every single-app build too once a live_url is available. Imported lazily
@@ -90,6 +102,8 @@ async def run_single(description: str) -> dict:
     }
 
     start = time.time()
+    desc_preview = (description or "").strip().replace("\n", " ")[:80]
+    logger.info("[build] start scenario: %r", desc_preview)
 
     try:
         async with httpx.AsyncClient(timeout=BUILD_TIMEOUT) as client:
@@ -130,11 +144,19 @@ async def run_single(description: str) -> dict:
                 result["status"] = "failed"
                 result["error_message"] = f"POST /build returned 200 but no build_id found. Response: {response.text[:300]}"
                 result["build_time_seconds"] = round(time.time() - start, 2)
+                logger.error("[build] %r — no build_id returned", desc_preview)
                 return result
+
+        logger.info("[build] %r — build_id=%s", desc_preview, build_id)
 
         # Step 2: Consume the SSE stream
         stream_url = f"{PHYSIS_BASE_URL}/build/{build_id}/stream"
         sse_events = []
+        # Track the last stage_number we logged so we emit one INFO
+        # line per stage TRANSITION instead of one per SSE event
+        # (Physis emits multiple events per stage — start, status,
+        # final). With 8 stages this is at most 8 log lines per build.
+        last_stage_logged = None
 
         try:
             timeout = httpx.Timeout(10.0, read=STREAM_TIMEOUT)
@@ -146,6 +168,23 @@ async def run_single(description: str) -> dict:
                         if line.startswith("data:"):
                             raw = line[5:].strip()
                             sse_events.append(raw)
+                            try:
+                                ev = json.loads(raw)
+                            except Exception:
+                                continue
+                            if not isinstance(ev, dict):
+                                continue
+                            stage_num  = ev.get("stage_number")
+                            stage_name = ev.get("stage")
+                            if stage_num is not None and stage_num != last_stage_logged:
+                                last_stage_logged = stage_num
+                                logger.info(
+                                    "[build] %s — stage %s/%s: %s",
+                                    build_id,
+                                    stage_num,
+                                    ev.get("total_stages") or "?",
+                                    stage_name or "(unknown)",
+                                )
 
         except httpx.TimeoutException:
             result["status"] = "failed"
@@ -276,5 +315,23 @@ async def run_single(description: str) -> dict:
             result["error_message"] = (
                 f"Validity sweep failed (score {score}/7 — see validity_tests for details)"
             )
+
+    # Final outcome log line — INFO on pass, ERROR on failure. duration
+    # is already set on the result dict in every code path.
+    final_status = result.get("status") or "unknown"
+    final_dur    = result.get("build_time_seconds")
+    if final_status == "passed":
+        logger.info(
+            "[build] %r — PASSED in %.1fs (live_url=%s)",
+            desc_preview, final_dur or 0.0, result.get("live_url"),
+        )
+    else:
+        logger.error(
+            "[build] %r — %s in %.1fs (%s)",
+            desc_preview,
+            final_status.upper(),
+            final_dur or 0.0,
+            (result.get("error_message") or "(no error message)")[:160],
+        )
 
     return result
