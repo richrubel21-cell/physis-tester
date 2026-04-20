@@ -310,7 +310,7 @@ export default function Dashboard({ onStartBatch, onViewBatch, onViewMaryBatch, 
             <div>
               <label style={{ color: "#6c7086", fontSize: "13px", display: "block", marginBottom: "6px" }}>App Count</label>
               <div style={{ display: "flex", gap: "6px" }}>
-                {[3, 7].map(n => (
+                {[2, 3].map(n => (
                   <button key={n} onClick={() => setFullApps(n)}
                     style={{ background: fullApps === n ? "#2a4a3f" : "#181825", border: `1px solid ${fullApps === n ? "#94e2d5" : "#313244"}`, borderRadius: "8px", color: fullApps === n ? "#94e2d5" : "#6c7086", padding: "8px 14px", cursor: "pointer", fontSize: "14px", fontWeight: "600" }}>
                     {n} apps
@@ -343,7 +343,7 @@ export default function Dashboard({ onStartBatch, onViewBatch, onViewMaryBatch, 
             <div>
               <label style={{ color: "#6c7086", fontSize: "13px", display: "block", marginBottom: "6px" }}>App Count</label>
               <div style={{ display: "flex", gap: "6px" }}>
-                {[3, 7].map(n => (
+                {[2, 3].map(n => (
                   <button key={n} onClick={() => setSeqApps(n)}
                     style={{ background: seqApps === n ? "#4a3f2a" : "#181825", border: `1px solid ${seqApps === n ? "#f9e2af" : "#313244"}`, borderRadius: "8px", color: seqApps === n ? "#f9e2af" : "#6c7086", padding: "8px 14px", cursor: "pointer", fontSize: "14px", fontWeight: "600" }}>
                     {n} apps
@@ -384,12 +384,12 @@ export default function Dashboard({ onStartBatch, onViewBatch, onViewMaryBatch, 
             <div style={{ color: "#6c7086", fontSize: "12px", marginTop: "4px" }}>Sequential Pass Rate</div>
           </div>
           <div style={statBox}>
-            <div style={{ fontSize: "26px", fontWeight: "700", color: "#89b4fa" }}>{ecoAnalytics.avg_3app_time_seconds ?? "—"}s</div>
-            <div style={{ color: "#6c7086", fontSize: "12px", marginTop: "4px" }}>Avg 3-App Time</div>
+            <div style={{ fontSize: "26px", fontWeight: "700", color: "#89b4fa" }}>{ecoAnalytics.avg_2app_time_seconds ?? "—"}s</div>
+            <div style={{ color: "#6c7086", fontSize: "12px", marginTop: "4px" }}>Avg 2-App Time</div>
           </div>
           <div style={statBox}>
-            <div style={{ fontSize: "26px", fontWeight: "700", color: "#89b4fa" }}>{ecoAnalytics.avg_7app_time_seconds ?? "—"}s</div>
-            <div style={{ color: "#6c7086", fontSize: "12px", marginTop: "4px" }}>Avg 7-App Time</div>
+            <div style={{ fontSize: "26px", fontWeight: "700", color: "#89b4fa" }}>{ecoAnalytics.avg_3app_time_seconds ?? "—"}s</div>
+            <div style={{ color: "#6c7086", fontSize: "12px", marginTop: "4px" }}>Avg 3-App Time</div>
           </div>
           <div style={{ ...statBox, flex: 2, minWidth: "260px" }}>
             <div style={{ fontSize: "14px", fontWeight: "600", color: "#f38ba8", lineHeight: 1.3 }}>

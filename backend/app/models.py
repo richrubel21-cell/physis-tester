@@ -118,7 +118,7 @@ class EcosystemBatch(Base):
     type                 = Column(String, nullable=False)            # "full" | "sequential"
     status               = Column(String, default="pending")         # pending, running, completed, failed
     scenario_count       = Column(Integer, default=0)
-    app_count            = Column(Integer, default=3)                # 3 or 7 — batch-wide
+    app_count            = Column(Integer, default=3)                # 2 or 3 — batch-wide
     pass_count           = Column(Integer, default=0)
     fail_count           = Column(Integer, default=0)
     pass_rate            = Column(Float, default=0.0)
@@ -134,7 +134,7 @@ class EcosystemRun(Base):
     id                    = Column(Integer, primary_key=True, index=True)
     batch_id              = Column(Integer, ForeignKey("ecosystem_batches.id"), nullable=False)
     business_description  = Column(Text, nullable=False)
-    app_count             = Column(Integer, default=3)           # 3 or 7
+    app_count             = Column(Integer, default=3)           # 2 or 3
     type                  = Column(String, nullable=False)       # "full" | "sequential"
     status                = Column(String, default="pending")    # pending, running, passed, failed, error
     apps_planned          = Column(Integer, default=0)

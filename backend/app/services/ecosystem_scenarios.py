@@ -2,7 +2,7 @@
 Ecosystem scenario pool for the Ecosystem Tester.
 
 Every entry describes a real business / role / life situation that naturally
-requires multiple connected apps (3–7). Descriptions are written in plain
+requires multiple connected apps (2 or 3). Descriptions are written in plain
 English as a non-technical user would type them into the Physis
 Ecosystem Builder. Industries, user types, and suggested app counts vary
 across the pool so batch runs exercise the full space.
@@ -10,7 +10,7 @@ across the pool so batch runs exercise the full space.
 Shape of each scenario:
     {
         "description":          str,
-        "suggested_app_count":  int,   # 3 or 7
+        "suggested_app_count":  int,   # 2 or 3 — capped to 3 by the planner
         "industry":             str,
         "user_type":            str,
     }
@@ -664,13 +664,24 @@ def get_ecosystem_scenarios(count: int = 5) -> list[dict]:
     """
     Return `count` ecosystem scenarios drawn without repetition from the
     550-entry pool. Caller pays no attention to suggested_app_count —
-    the Ecosystem Tester UI picks the app_count (3 or 7) batch-wide.
+    the Ecosystem Tester UI picks the app_count (2 or 3) batch-wide,
+    capped at 3 to match the platform's connect endpoint.
     """
     if count <= 0:
         return []
     sample = random.sample(ECOSYSTEM_SCENARIOS, min(count, len(ECOSYSTEM_SCENARIOS)))
     # Shallow-copy each dict so callers can mutate freely without poisoning the pool.
-    return [dict(s) for s in sample]
+    # Cap any seeded suggested_app_count at 3 so legacy 5/7-app pool entries
+    # can't sneak through and request more apps than the planner accepts.
+    out = []
+    for s in sample:
+        copy = dict(s)
+        try:
+            copy["suggested_app_count"] = min(int(copy.get("suggested_app_count") or 3), 3)
+        except Exception:
+            copy["suggested_app_count"] = 3
+        out.append(copy)
+    return out
 
 
 def pool_size() -> int:

@@ -34,7 +34,7 @@ router = APIRouter(prefix="/ecosystem", tags=["ecosystem"])
 
 class EcosystemBatchRequest(BaseModel):
     scenario_count: int = 5           # how many business scenarios to run
-    app_count:      int = 3           # 3 or 7 — applied to every scenario in the batch
+    app_count:      int = 3           # 2 or 3 — applied to every scenario in the batch
     type:           str = "full"      # "full" | "sequential"
 
 
@@ -313,8 +313,8 @@ async def _run_batch_background(batch_id: int, type_: str, app_count: int, scena
 @router.post("/batch")
 async def start_ecosystem_batch(body: EcosystemBatchRequest, db: Session = Depends(get_db)):
     """Pick N scenarios from the pool, start a batch, return the batch_id immediately."""
-    if body.app_count not in (3, 7):
-        raise HTTPException(status_code=400, detail="app_count must be 3 or 7")
+    if body.app_count not in (2, 3):
+        raise HTTPException(status_code=400, detail="app_count must be 2 or 3")
     if body.type not in ("full", "sequential"):
         raise HTTPException(status_code=400, detail="type must be 'full' or 'sequential'")
     if body.scenario_count <= 0 or body.scenario_count > 50:
@@ -474,10 +474,10 @@ def ecosystem_analytics(db: Session = Depends(get_db)):
     full_pass_rate   = round(sum(1 for r in full_runs       if r.passed) / len(full_runs) * 100, 1) if full_runs else 0.0
     seq_pass_rate    = round(sum(1 for r in sequential_runs if r.passed) / len(sequential_runs) * 100, 1) if sequential_runs else 0.0
 
+    two_runs         = [r for r in all_runs if r.app_count == 2 and r.total_time_seconds]
     three_runs       = [r for r in all_runs if r.app_count == 3 and r.total_time_seconds]
-    seven_runs       = [r for r in all_runs if r.app_count == 7 and r.total_time_seconds]
+    avg_2app         = round(sum(r.total_time_seconds for r in two_runs)   / len(two_runs),   1) if two_runs   else None
     avg_3app         = round(sum(r.total_time_seconds for r in three_runs) / len(three_runs), 1) if three_runs else None
-    avg_7app         = round(sum(r.total_time_seconds for r in seven_runs) / len(seven_runs), 1) if seven_runs else None
 
     # Most common failure reason — group by a first-word heuristic since
     # fail_reason strings are free-form.
@@ -498,8 +498,8 @@ def ecosystem_analytics(db: Session = Depends(get_db)):
         "total_ecosystem_runs":    total,
         "full_pass_rate":          full_pass_rate,
         "sequential_pass_rate":    seq_pass_rate,
+        "avg_2app_time_seconds":   avg_2app,
         "avg_3app_time_seconds":   avg_3app,
-        "avg_7app_time_seconds":   avg_7app,
         "most_common_failure":     most_common_failure,
         "pool_size":               pool_size(),
     }
