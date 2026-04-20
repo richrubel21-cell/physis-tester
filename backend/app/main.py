@@ -12,44 +12,58 @@ Base.metadata.create_all(bind=engine)
 
 # ─── Lightweight column migration ──────────────────────────────────────────
 # create_all() only creates tables — it never adds columns to ones that
-# already exist. The validity-test columns added in this release would
-# stay missing in any DB that pre-dates them, so we ALTER TABLE here at
-# startup. Both SQLite and Postgres support ADD COLUMN; SQLite does not
-# allow IF NOT EXISTS for columns, so we check via the inspector first.
+# already exist. The validity / proof-score columns added in recent
+# releases would stay missing in any DB that pre-dates them, so we ALTER
+# TABLE here at startup.
+#
+# Two production lessons baked into this version:
+#   1. Use BOOLEAN DEFAULT FALSE — *not* DEFAULT 0. SQLite accepts the
+#      integer form, but Postgres rejects it with "invalid input syntax
+#      for type boolean", which used to abort the whole migration mid-way
+#      (root cause of the "Batch not found" regression in commit 0e5243d).
+#   2. Each ALTER runs in its OWN transaction. On Postgres, once any
+#      statement in a transaction errors, every later statement in that
+#      same transaction also errors with InFailedSqlTransaction — so a
+#      single bad ALTER under one big `engine.begin()` would silently
+#      drop every subsequent column add and the whole transaction would
+#      rollback. Per-statement transactions make the migration robust to
+#      one bad column without losing the rest.
 def _ensure_columns():
     inspector = inspect(engine)
     plans = [
         ("runs", [
             ("proof_score",        "INTEGER DEFAULT 0"),
             ("validity_score",     "INTEGER DEFAULT 0"),
-            ("validity_passed",    "BOOLEAN DEFAULT 0"),
+            ("validity_passed",    "BOOLEAN DEFAULT FALSE"),
             ("validity_tests",     "TEXT"),
-            ("app_works",          "BOOLEAN DEFAULT 0"),
-            ("powered_by_physis",  "BOOLEAN DEFAULT 0"),
+            ("app_works",          "BOOLEAN DEFAULT FALSE"),
+            ("powered_by_physis",  "BOOLEAN DEFAULT FALSE"),
         ]),
         ("ecosystem_runs", [
             ("validity_score",        "INTEGER DEFAULT 0"),
-            ("validity_passed",       "BOOLEAN DEFAULT 0"),
-            ("all_powered_by_physis", "BOOLEAN DEFAULT 0"),
+            ("validity_passed",       "BOOLEAN DEFAULT FALSE"),
+            ("all_powered_by_physis", "BOOLEAN DEFAULT FALSE"),
         ]),
     ]
-    with engine.begin() as conn:
-        for table, cols in plans:
-            try:
-                existing = {c["name"] for c in inspector.get_columns(table)}
-            except Exception:
-                # Table doesn't exist yet — create_all() will handle it.
+    for table, cols in plans:
+        try:
+            existing = {c["name"] for c in inspector.get_columns(table)}
+        except Exception:
+            # Table doesn't exist yet — create_all() will handle it.
+            continue
+        for name, ddl in cols:
+            if name in existing:
                 continue
-            for name, ddl in cols:
-                if name in existing:
-                    continue
-                try:
+            try:
+                # Per-column transaction: a failed ALTER on one column
+                # never poisons the next column's ADD.
+                with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
-                except Exception as exc:
-                    # Already added by another worker, or non-fatal — log
-                    # only at print so a missing migration never crashes
-                    # the API on boot.
-                    print(f"[migration] {table}.{name}: {exc}")
+            except Exception as exc:
+                # Already added by another worker, or non-fatal — log
+                # only at print so a missing migration never crashes
+                # the API on boot.
+                print(f"[migration] {table}.{name}: {exc}")
 
 
 _ensure_columns()

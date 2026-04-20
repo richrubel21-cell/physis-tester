@@ -59,26 +59,34 @@ def get_batch_status(batch_id: int, db: Session = Depends(get_db)):
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
 
-    runs = get_runs(db, batch_id=batch_id, limit=200)
+    # Defensive: if the runs table is mid-migration (e.g. a fresh deploy
+    # where the proof_score / validity_* columns haven't ALTER'd in yet),
+    # SQLAlchemy's SELECT will reference columns that don't exist in
+    # Postgres and the query raises ProgrammingError. We don't want that
+    # to 500 the whole batch monitor — the user should still see the
+    # batch metadata while the migration finishes. Catch broadly, log,
+    # and fall back to an empty runs list.
+    try:
+        runs = get_runs(db, batch_id=batch_id, limit=200)
+    except Exception as exc:
+        print(f"[runs] get_runs failed for batch {batch_id}: {exc}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        runs = []
 
-    return {
-        "batch_id": batch.id,
-        "status": batch.status,
-        "total": batch.total,
-        "completed": batch.completed,
-        "passed": batch.passed,
-        "failed": batch.failed,
-        "started_at": batch.started_at.isoformat(),
-        "finished_at": batch.finished_at.isoformat() if batch.finished_at else None,
-        "runs": [
-            {
+    serialized_runs = []
+    for r in runs:
+        try:
+            serialized_runs.append({
                 "run_id":             r.id,
                 "description":        r.description,
                 "status":             r.status,
                 "build_time_seconds": r.build_time_seconds,
                 "live_url":           r.live_url,
                 "error_message":      r.error_message,
-                "started_at":         r.started_at.isoformat(),
+                "started_at":         r.started_at.isoformat() if r.started_at else None,
                 "finished_at":        r.finished_at.isoformat() if r.finished_at else None,
                 # Proof score (tests_passed / 21) gates Promote-to-Template.
                 # Defaulted via getattr so older DBs missing the column still
@@ -92,9 +100,22 @@ def get_batch_status(batch_id: int, db: Session = Depends(get_db)):
                 "validity_tests":     _decode_validity_tests(getattr(r, "validity_tests", None)),
                 "app_works":          bool(getattr(r, "app_works", False)),
                 "powered_by_physis":  bool(getattr(r, "powered_by_physis", False)),
-            }
-            for r in runs
-        ]
+            })
+        except Exception as exc:
+            # One bad row shouldn't blank the whole batch — drop it and
+            # keep rendering the rest.
+            print(f"[runs] serialize failed for run {getattr(r, 'id', '?')}: {exc}")
+
+    return {
+        "batch_id":    batch.id,
+        "status":      batch.status,
+        "total":       batch.total,
+        "completed":   batch.completed,
+        "passed":      batch.passed,
+        "failed":      batch.failed,
+        "started_at":  batch.started_at.isoformat()  if batch.started_at  else None,
+        "finished_at": batch.finished_at.isoformat() if batch.finished_at else None,
+        "runs":        serialized_runs,
     }
 
 
