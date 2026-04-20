@@ -9,6 +9,14 @@ from .routes.ecosystem import router as ecosystem_router
 from .routes.functional import router as functional_router
 from .routes.admin import router as admin_router, cleanup_orphans_at_startup
 
+# Hardcoded short hash of the commit being built into the Docker
+# image. Bump on every commit that ships substantive code so a quick
+# `grep "[physis-tester] starting"` in Render Live Tail confirms which
+# revision is actually running. Stops us misdiagnosing "the new code
+# isn't taking effect" when really the image just hasn't rebuilt.
+VERSION_TAG = "fix/error-type-capture"
+print(f"[physis-tester] starting {VERSION_TAG}", flush=True)
+
 Base.metadata.create_all(bind=engine)
 
 
@@ -56,6 +64,12 @@ def _ensure_columns():
             ("journey_passed",                 "BOOLEAN DEFAULT FALSE"),
             ("all_apps_output_passed",         "BOOLEAN DEFAULT FALSE"),
             ("functional_failure_screenshots", "TEXT"),
+            # Structured failure capture — added when physis started
+            # surfacing a non-PII error_type on the final SSE event.
+            # last_event holds the full final event JSON; error_type
+            # is the closed-set bucket the dashboard filters on.
+            ("last_event",                     "TEXT"),
+            ("error_type",                     "VARCHAR(64)"),
         ]),
         # ecosystem_batches gained marketplace_eligible after the batch
         # rollup landed. Missing column was triggering UndefinedColumn on

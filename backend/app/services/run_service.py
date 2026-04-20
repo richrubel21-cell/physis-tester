@@ -54,6 +54,16 @@ def update_run(db: Session, run_id: int, sim_result: dict) -> Run:
     run.error_message = sim_result["error_message"]
     run.physis_response = sim_result["physis_response"]
 
+    # last_event / error_type — structured failure signals from the
+    # final physis SSE event. Wrapped separately so a missing column
+    # (DB pre-migration) doesn't drop the rest of the update.
+    if "last_event" in sim_result or "error_type" in sim_result:
+        try:
+            run.last_event = sim_result.get("last_event")
+            run.error_type = sim_result.get("error_type")
+        except Exception as exc:
+            print(f"[run_service] last_event/error_type write skipped (run {run_id}): {exc}")
+
     # Proof score (tests_passed) — captured by simulator from the SSE
     # final event or the /status fallback. Wrapped separately from the
     # validity block so a missing proof_score column doesn't drop the

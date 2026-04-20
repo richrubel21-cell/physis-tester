@@ -242,6 +242,18 @@ async def run_single(description: str) -> dict:
                         if isinstance(tp, int) and tp > 0:
                             result["proof_score"] = tp
 
+                    # Capture last_event + the new non-PII error_type
+                    # field that physis surfaces on every final SSE
+                    # event. last_event is persisted as a JSON string so
+                    # the dashboard can show the structured failure
+                    # without re-parsing error_message.
+                    last_ev = status_data.get("last_event") or {}
+                    if isinstance(last_ev, dict):
+                        result["last_event"] = json.dumps(last_ev)
+                        et = last_ev.get("error_type")
+                        if isinstance(et, str) and et.strip():
+                            result["error_type"] = et
+
                     if live_url:
                         result["status"] = "passed"
                         result["live_url"] = live_url
@@ -249,10 +261,14 @@ async def run_single(description: str) -> dict:
                         result["status"] = "passed"
                     elif build_status in ("failed", "error"):
                         result["status"] = "failed"
-                        result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:300]}"
+                        # Truncation bumped 300→1500 chars so the
+                        # error_type field at the end of last_event
+                        # survives the cut. Anything bigger is in
+                        # physis_response (5000-char window above).
+                        result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:1500]}"
                     else:
                         result["status"] = "failed"
-                        result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:500]}"
+                        result["error_message"] = f"Build status: {build_status}. Raw: {status_raw[:1500]}"
 
                 except json.JSONDecodeError:
                     result["status"] = "failed"

@@ -86,6 +86,12 @@ def get_batch_status(batch_id: int, db: Session = Depends(get_db)):
                 "build_time_seconds": r.build_time_seconds,
                 "live_url":           r.live_url,
                 "error_message":      r.error_message,
+                # Structured failure signals — last_event captures the
+                # full final SSE event (parsed back into a dict for the
+                # dashboard); error_type is the non-PII bucket for
+                # quick filtering.
+                "last_event":         _decode_last_event(getattr(r, "last_event", None)),
+                "error_type":         getattr(r, "error_type", None),
                 "started_at":         r.started_at.isoformat() if r.started_at else None,
                 "finished_at":        r.finished_at.isoformat() if r.finished_at else None,
                 # Proof score (tests_passed / 21) gates Promote-to-Template.
@@ -142,6 +148,20 @@ def _decode_validity_tests(raw):
         return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _decode_last_event(raw):
+    """last_event is persisted as a JSON string of the dict physis
+    sent on the final SSE event. The frontend wants the dict back."""
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
 
 @router.get("/")
 def list_batches(db: Session = Depends(get_db)):

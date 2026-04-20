@@ -39,6 +39,16 @@ class Run(Base):
     live_url = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
     physis_response = Column(Text, nullable=True)
+    # Last SSE event from physis (JSON string). Captures the full
+    # structured failure including the non-PII error_type field that
+    # the truncated error_message sometimes cuts off.
+    last_event = Column(Text, nullable=True)
+    # Closed-set non-PII failure category extracted from
+    # last_event.error_type (json_parse_failed_after_retries,
+    # max_tokens_exceeded, transient_api_error, deployment_failed,
+    # moderation_refusal, unknown_error). Surfaced to the dashboard as
+    # the primary "why did this fail" signal.
+    error_type = Column(String, nullable=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
     # ── Proof score — number of the 21 Physis proof tests that passed
