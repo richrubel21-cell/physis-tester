@@ -1,19 +1,15 @@
 import httpx
 import json
-import logging
 import random
 import time
 
-# Module-level logger. Uvicorn's default logging config captures
-# anything at INFO+ and ships it to stdout with timestamps, so these
-# lines land in Render's log viewer without extra setup. Greppable
-# prefix per line: physis_tester.app.services.simulator.
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    # Uvicorn already attaches its own handler in production; the
-    # explicit setLevel is here so dev runs (python -m pytest, repl)
-    # also surface our INFO lines without needing logging.basicConfig.
-    logger.setLevel(logging.INFO)
+# Direct print() for all log lines — Python's logging module silently
+# drops records when no handler is attached anywhere in the logger
+# hierarchy, which is the default state under uvicorn for application
+# loggers. print(..., flush=True) goes straight to stdout so Render's
+# Live Tail catches every line without any logging.basicConfig
+# arrangement (PYTHONUNBUFFERED=1 is set in the Dockerfile, but
+# explicit flush belt-and-suspenders against env-var changes).
 
 # Validity sweep — same 7 tests we run on every ecosystem app, now run on
 # every single-app build too once a live_url is available. Imported lazily
@@ -103,7 +99,7 @@ async def run_single(description: str) -> dict:
 
     start = time.time()
     desc_preview = (description or "").strip().replace("\n", " ")[:80]
-    logger.info("[build] start scenario: %r", desc_preview)
+    print(f"[simulator] [build] start scenario: {desc_preview!r}", flush=True)
 
     try:
         async with httpx.AsyncClient(timeout=BUILD_TIMEOUT) as client:
@@ -144,10 +140,10 @@ async def run_single(description: str) -> dict:
                 result["status"] = "failed"
                 result["error_message"] = f"POST /build returned 200 but no build_id found. Response: {response.text[:300]}"
                 result["build_time_seconds"] = round(time.time() - start, 2)
-                logger.error("[build] %r — no build_id returned", desc_preview)
+                print(f"[simulator] [build] {desc_preview!r} — no build_id returned", flush=True)
                 return result
 
-        logger.info("[build] %r — build_id=%s", desc_preview, build_id)
+        print(f"[simulator] [build] {desc_preview!r} — build_id={build_id}", flush=True)
 
         # Step 2: Consume the SSE stream
         stream_url = f"{PHYSIS_BASE_URL}/build/{build_id}/stream"
@@ -178,12 +174,10 @@ async def run_single(description: str) -> dict:
                             stage_name = ev.get("stage")
                             if stage_num is not None and stage_num != last_stage_logged:
                                 last_stage_logged = stage_num
-                                logger.info(
-                                    "[build] %s — stage %s/%s: %s",
-                                    build_id,
-                                    stage_num,
-                                    ev.get("total_stages") or "?",
-                                    stage_name or "(unknown)",
+                                print(
+                                    f"[simulator] [build] {build_id} — stage {stage_num}/"
+                                    f"{ev.get('total_stages') or '?'}: {stage_name or '(unknown)'}",
+                                    flush=True,
                                 )
 
         except httpx.TimeoutException:
@@ -319,19 +313,19 @@ async def run_single(description: str) -> dict:
     # Final outcome log line — INFO on pass, ERROR on failure. duration
     # is already set on the result dict in every code path.
     final_status = result.get("status") or "unknown"
-    final_dur    = result.get("build_time_seconds")
+    final_dur    = result.get("build_time_seconds") or 0.0
     if final_status == "passed":
-        logger.info(
-            "[build] %r — PASSED in %.1fs (live_url=%s)",
-            desc_preview, final_dur or 0.0, result.get("live_url"),
+        print(
+            f"[simulator] [build] {desc_preview!r} — PASSED in {final_dur:.1f}s "
+            f"(live_url={result.get('live_url')})",
+            flush=True,
         )
     else:
-        logger.error(
-            "[build] %r — %s in %.1fs (%s)",
-            desc_preview,
-            final_status.upper(),
-            final_dur or 0.0,
-            (result.get("error_message") or "(no error message)")[:160],
+        err = (result.get("error_message") or "(no error message)")[:160]
+        print(
+            f"[simulator] [build] {desc_preview!r} — {final_status.upper()} "
+            f"in {final_dur:.1f}s ({err})",
+            flush=True,
         )
 
     return result
