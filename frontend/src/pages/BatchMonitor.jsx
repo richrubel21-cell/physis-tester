@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { api } from "../api/services";
 import { usePoll } from "../hooks/usePoll";
 import ApproveModal from "../ApproveModal";
+import PromoteToTemplateModal from "../PromoteToTemplateModal";
 
 const statusColor = {
   passed: "#a6e3a1",
@@ -24,6 +25,7 @@ export default function BatchMonitor({ batchId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [hasFetched, setHasFetched] = useState(false);
   const [approveRun, setApproveRun] = useState(null);
+  const [promoteRun, setPromoteRun] = useState(null);
 
   // FIX: stop polling on any terminal state, not just when status is 'running'/'pending'
   // Previously: batch?.status === "running" || batch?.status === "pending"
@@ -212,6 +214,36 @@ export default function BatchMonitor({ batchId, onBack }) {
                     ✓ Approve for Marketplace
                   </button>
                 )}
+
+                {/* Promote to Template — gold button, gated on the strict
+                    quality bar: passed status + validity + Powered-by-Physis +
+                    proof_score >= 18. proof_score is read off the run; if the
+                    single-app pipeline hasn't started writing it yet, the
+                    button stays hidden so we never promote unverified builds. */}
+                {run.status === "passed"
+                    && run.live_url
+                    && run.validity_passed
+                    && run.powered_by_physis
+                    && (run.proof_score ?? 0) >= 18 && (
+                  <button
+                    type="button"
+                    onClick={() => setPromoteRun(run)}
+                    style={{
+                      background: "#F59E0B",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "10px",
+                      padding: "4px 10px",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                      boxShadow: "0 2px 6px rgba(245,158,11,0.30)",
+                    }}
+                  >
+                    ⭐ Promote to Template
+                  </button>
+                )}
               </div>
             ))}
             {/* App Validity panels — rendered below the row so the run
@@ -240,6 +272,10 @@ export default function BatchMonitor({ batchId, onBack }) {
 
       {approveRun && (
         <ApproveModal run={approveRun} onClose={() => setApproveRun(null)} />
+      )}
+
+      {promoteRun && (
+        <PromoteToTemplateModal run={promoteRun} onClose={() => setPromoteRun(null)} />
       )}
     </div>
   );
