@@ -101,6 +101,46 @@ ECOSYSTEM_TOTAL_BUDGET = 3600   # 60 min overall budget per ecosystem run
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _get_test_user_auth():
+    """Resolve the identity for an ecosystem run: (user_id, access_token).
+
+    Physis only auto-joins built apps into an ecosystem for a REAL Supabase
+    user_id, so a throwaway UUID never actually joins and the integration tests
+    (shared nav / data / theme) can't pass. When PHYSIS_TEST_USER_EMAIL and
+    PHYSIS_TEST_USER_PASSWORD are set (Render env), we sign in to Physis at run
+    start and return that user's real (user_id, access_token) — builds are then
+    attributed to the dedicated test user and the ecosystem join fires for real.
+    With no creds (local/CI) we fall back to a throwaway UUID + no token, i.e.
+    exactly today's behaviour, so nothing breaks.
+    """
+    import os
+    email = os.getenv("PHYSIS_TEST_USER_EMAIL")
+    password = os.getenv("PHYSIS_TEST_USER_PASSWORD")
+    if not (email and password):
+        return str(uuid.uuid4()), None
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                f"{PHYSIS_BASE_URL}/api/auth/signin",
+                json={"email": email, "password": password},
+                headers={"Content-Type": "application/json"},
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            uid = data.get("user_id")
+            token = data.get("access_token")
+            if uid:
+                logger.info("[ecosystem: auth] signed in as test user %s — real ecosystem join enabled", email)
+                return uid, token
+            logger.warning("[ecosystem: auth] signin ok but no user_id — falling back to throwaway UUID")
+        else:
+            logger.warning("[ecosystem: auth] test-user signin HTTP %s: %s — falling back to throwaway UUID",
+                           resp.status_code, resp.text[:160])
+    except Exception as exc:
+        logger.warning("[ecosystem: auth] test-user signin crashed: %s — falling back to throwaway UUID", exc)
+    return str(uuid.uuid4()), None
+
+
 async def _plan_ecosystem(description: str, app_count: int, user_id: str) -> dict:
     """
     Call POST /api/ecosystem-builder/plan and return the raw response dict
@@ -175,14 +215,20 @@ def _build_payload_for_app(app: dict, user_id: str, join_ecosystem: bool) -> dic
     }
 
 
-async def _post_build(payload: dict) -> dict:
-    """POST /build and return {ok, build_id, error}."""
+async def _post_build(payload: dict, auth_token=None) -> dict:
+    """POST /build and return {ok, build_id, error}. When auth_token is set it is
+    sent as a Bearer token so Physis attributes the build to the real test user
+    (create_build trusts the token's user_id over the body) and the ecosystem
+    auto-join fires — instead of silently dropping a throwaway body user_id."""
+    headers = {"Content-Type": "application/json"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
     try:
         async with httpx.AsyncClient(timeout=BUILD_POST_TIMEOUT) as client:
             resp = await client.post(
                 f"{PHYSIS_BASE_URL}/build",
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
             )
     except httpx.TimeoutException:
         return {"ok": False, "error": "POST /build timed out"}
@@ -271,7 +317,7 @@ async def _poll_build_status(build_id: str) -> dict:
         await asyncio.sleep(STATUS_POLL_INTERVAL)
 
 
-async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -> dict:
+async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool, auth_token=None) -> dict:
     """
     Build one planned app. Returns a per-app result dict suitable for the
     EcosystemRun.apps_detail JSON array. Once the app deploys we also run
@@ -281,7 +327,7 @@ async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -
     payload  = _build_payload_for_app(app, user_id, join_ecosystem)
     started  = time.time()
 
-    posted = await _post_build(payload)
+    posted = await _post_build(payload, auth_token=auth_token)
     if not posted["ok"]:
         empty_validity = run_validity_tests_blank("Build did not start, no live URL to test")
         return {
@@ -367,7 +413,7 @@ def _summarise_apps(apps_detail: list[dict]) -> dict:
 async def run_full_ecosystem(description: str, app_count: int) -> dict:
     """MODE A — plan + fan-out builds + verify."""
     start   = time.time()
-    user_id = str(uuid.uuid4())
+    user_id, auth_token = await _get_test_user_auth()
 
     plan = await _plan_ecosystem(description, app_count, user_id)
     if not plan["ok"]:
@@ -414,7 +460,7 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] starting build: "
             f"{app.get('name') or '(unnamed)'}"
         )
-        detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
+        detail = await _run_single_app_build(app, user_id, join_ecosystem=True, auth_token=auth_token)
         apps_detail.append(detail)
         logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] done — "
@@ -492,7 +538,7 @@ def _evaluate_ecosystem_pass(apps_detail: list, summary: dict, planned_count: in
 async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
     """MODE B — plan, then build strictly one at a time with join_ecosystem=True."""
     start   = time.time()
-    user_id = str(uuid.uuid4())
+    user_id, auth_token = await _get_test_user_auth()
 
     plan = await _plan_ecosystem(description, app_count, user_id)
     if not plan["ok"]:
@@ -535,7 +581,7 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] starting build: "
             f"{app.get('name') or '(unnamed)'}"
         )
-        detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
+        detail = await _run_single_app_build(app, user_id, join_ecosystem=True, auth_token=auth_token)
         apps_detail.append(detail)
         logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] done — "
