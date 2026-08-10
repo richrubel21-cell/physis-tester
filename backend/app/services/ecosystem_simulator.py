@@ -606,13 +606,67 @@ def _test_result(test_id: int, name: str, passed: bool, detail: str) -> dict:
 
 
 async def _fetch_html(url: str) -> tuple[int, str]:
-    """GET url and return (status_code, body_text). Returns (0, "") on network error."""
+    """GET url and return (status_code, rendered_body). Returns (0, "") on error.
+
+    Renders with Playwright (headless chromium) instead of plain httpx so the
+    integration tests see the DOM AFTER Physis's ecosystem-nav runtime fetch
+    resolves. Tests 22 (Shared Nav), 23 (Nav Links), 25 (Ecosystem Name) all
+    depend on <a href="…"> sibling links and the ecosystem name that the app
+    shell injects at load time via `fetch('/api/ecosystem/by-id/…')`. A plain
+    httpx GET only sees the pre-render JSX inside a <script type="text/babel">
+    block, which doesn't yet contain any of that. Playwright waits for the
+    same fetch a real browser would, so the integration tests exercise the
+    same DOM shape a user would see.
+
+    Falls back to httpx when Playwright is unavailable (import failed at
+    module load, e.g. dev machine without playwright install). The fallback
+    matches the previous behaviour exactly — those integration tests will
+    still fail, but the batch keeps running.
+    """
     try:
-        async with httpx.AsyncClient(timeout=INTEGRATION_FETCH_TIMEOUT, follow_redirects=True) as client:
-            r = await client.get(url)
-            return r.status_code, r.text or ""
+        from .functional_tester import get_browser
+        browser = await get_browser()
+    except Exception:
+        browser = None
+
+    if browser is None:
+        # Playwright not available — fall back to old behaviour.
+        try:
+            async with httpx.AsyncClient(
+                timeout=INTEGRATION_FETCH_TIMEOUT, follow_redirects=True,
+            ) as client:
+                r = await client.get(url)
+                return r.status_code, r.text or ""
+        except Exception:
+            return 0, ""
+
+    context = None
+    page    = None
+    try:
+        context = await browser.new_context()
+        page    = await context.new_page()
+        # domcontentloaded is not enough — Physis's shell issues its
+        # /api/ecosystem/by-id/… fetch AFTER parse + hydration. Wait for the
+        # network to go quiet so the sibling <a href> links and the
+        # ecosystem-name text node have landed in the DOM.
+        resp = await page.goto(
+            url, timeout=INTEGRATION_FETCH_TIMEOUT * 1000,
+            wait_until="networkidle",
+        )
+        status = resp.status if resp else 0
+        body   = await page.content()
+        return status, body or ""
     except Exception:
         return 0, ""
+    finally:
+        # Close per-fetch context to release memory; leave the singleton
+        # browser warm for the next scene / next scenario.
+        if page is not None:
+            try:    await page.close()
+            except Exception: pass
+        if context is not None:
+            try:    await context.close()
+            except Exception: pass
 
 
 def _extract_subdomain(url: str) -> str:
@@ -772,10 +826,20 @@ async def _test_shared_data_layer(apps: list[dict]) -> dict:
 
 
 async def _test_ai_engine_present(apps: list[dict], htmls: dict[str, str]) -> dict:
+    # Allowlist mirrors the per-app Test 32 fix in physis-tester commit
+    # eab62bb: Physis's canonical AI endpoint is POST /generate — the
+    # deployed shell issues `fetch(PHYSIS_API_BASE + '/api/generate', …)`
+    # (standard_app.jsx:61 and equivalent in the multi-page shell), so
+    # both "/generate" and "/api/generate" are legitimate AI-hook fingerprints.
+    # Kept "useai"/"/api/ai"/"ai_engine"/"ai-engine" for older templates and
+    # any future custom hook naming.
     missing: list[str] = []
     for a in apps:
         body = (htmls.get(a["live_url"], "") or "").lower()
-        if not any(token in body for token in ("useai", "/api/ai", "ai_engine", "ai-engine")):
+        if not any(token in body for token in (
+            "/generate", "/api/generate",
+            "useai", "/api/ai", "ai_engine", "ai-engine",
+        )):
             missing.append(a.get("name") or a["live_url"])
     passed = not missing
     detail = "AI hook indicator found on every app" if passed else f"AI hook missing on: {', '.join(missing)}"
