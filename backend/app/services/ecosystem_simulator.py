@@ -52,9 +52,11 @@ import random
 import sys
 import time
 import uuid
+from typing import Optional
 
 import httpx
 
+from .auth_helper import get_test_bearer
 from .simulator import (
     BASE_PAYLOAD,
     COMPLEXITY_OPTIONS,
@@ -161,10 +163,18 @@ def _build_payload_for_app(app: dict, user_id: str, join_ecosystem: bool) -> dic
     Build a /build POST body for a single planned app. Uses the app's
     purpose as the description (fed into both generates and userInput so
     it wins against the BASE_PAYLOAD default of 'web app').
+
+    Threads the plan's template_id into the payload — without it Physis
+    can't route the build through template mode, which is the ONLY path
+    that bakes ECOSYSTEM_ID / APP_SUBDOMAIN / PHYSIS_API_BASE consts into
+    the deployed app.jsx. Without those consts the runtime ecosystem fetch
+    never fires (nav strip stays hidden, ecosystem name never appears) and
+    Test 47's regex finds no ECOSYSTEM_ID at all — the whole cluster of
+    integration tests 22/23/25/47 cascade from this single omission.
     """
     purpose = str(app.get("purpose") or "").strip() or "A helper tool"
     name    = str(app.get("name")    or "").strip() or "PhysisApp"
-    return {
+    payload = {
         **BASE_PAYLOAD,
         "generates":      purpose,
         "userInput":      purpose,
@@ -173,16 +183,33 @@ def _build_payload_for_app(app: dict, user_id: str, join_ecosystem: bool) -> dic
         "user_id":        user_id,
         "join_ecosystem": join_ecosystem,
     }
+    tpl_id = str(app.get("template_id") or "").strip()
+    if tpl_id:
+        payload["template_id"] = tpl_id
+    return payload
 
 
-async def _post_build(payload: dict) -> dict:
-    """POST /build and return {ok, build_id, error}."""
+async def _post_build(payload: dict, bearer: Optional[str] = None) -> dict:
+    """POST /build and return {ok, build_id, error}.
+
+    When bearer is provided, sends it as Authorization so Physis's
+    create_build overrides payload.user_id with the real Supabase user_id
+    (api.py:2511-2512). That real id lets Physis's build_runner call
+    _resolve_or_create_ecosystem_id (d403033) successfully — the fake
+    UUID we used to send violated the user_ecosystems.user_id → auth.users
+    FK, silently returning None and leaving ecosystem_id empty in the
+    baked app.jsx. With a real user id, get-or-create succeeds and the
+    ecosystem_id is threaded end-to-end into the deployed const.
+    """
+    headers = {"Content-Type": "application/json"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
     try:
         async with httpx.AsyncClient(timeout=BUILD_POST_TIMEOUT) as client:
             resp = await client.post(
                 f"{PHYSIS_BASE_URL}/build",
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
             )
     except httpx.TimeoutException:
         return {"ok": False, "error": "POST /build timed out"}
@@ -271,7 +298,10 @@ async def _poll_build_status(build_id: str) -> dict:
         await asyncio.sleep(STATUS_POLL_INTERVAL)
 
 
-async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -> dict:
+async def _run_single_app_build(
+    app: dict, user_id: str, join_ecosystem: bool,
+    bearer: Optional[str] = None,
+) -> dict:
     """
     Build one planned app. Returns a per-app result dict suitable for the
     EcosystemRun.apps_detail JSON array. Once the app deploys we also run
@@ -281,7 +311,7 @@ async def _run_single_app_build(app: dict, user_id: str, join_ecosystem: bool) -
     payload  = _build_payload_for_app(app, user_id, join_ecosystem)
     started  = time.time()
 
-    posted = await _post_build(payload)
+    posted = await _post_build(payload, bearer=bearer)
     if not posted["ok"]:
         empty_validity = run_validity_tests_blank("Build did not start, no live URL to test")
         return {
@@ -368,6 +398,13 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
     """MODE A — plan + fan-out builds + verify."""
     start   = time.time()
     user_id = str(uuid.uuid4())
+    bearer  = get_test_bearer()
+    if not bearer:
+        logger.warning(
+            "[ecosystem] no test-user bearer available — integration tests "
+            "22/23/25/47 will fail because Physis can't resolve ecosystem_id "
+            "for a fake user_id (user_ecosystems.user_id has an FK to auth.users)"
+        )
 
     plan = await _plan_ecosystem(description, app_count, user_id)
     if not plan["ok"]:
@@ -414,7 +451,7 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] starting build: "
             f"{app.get('name') or '(unnamed)'}"
         )
-        detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
+        detail = await _run_single_app_build(app, user_id, join_ecosystem=True, bearer=bearer)
         apps_detail.append(detail)
         logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] done — "
@@ -493,6 +530,13 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
     """MODE B — plan, then build strictly one at a time with join_ecosystem=True."""
     start   = time.time()
     user_id = str(uuid.uuid4())
+    bearer  = get_test_bearer()
+    if not bearer:
+        logger.warning(
+            "[ecosystem] no test-user bearer available — integration tests "
+            "22/23/25/47 will fail because Physis can't resolve ecosystem_id "
+            "for a fake user_id (user_ecosystems.user_id has an FK to auth.users)"
+        )
 
     plan = await _plan_ecosystem(description, app_count, user_id)
     if not plan["ok"]:
@@ -535,7 +579,7 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] starting build: "
             f"{app.get('name') or '(unnamed)'}"
         )
-        detail = await _run_single_app_build(app, user_id, join_ecosystem=True)
+        detail = await _run_single_app_build(app, user_id, join_ecosystem=True, bearer=bearer)
         apps_detail.append(detail)
         logger.info(
             f"[ecosystem: {eco_tag} app {idx}/{len(apps)}] done — "
