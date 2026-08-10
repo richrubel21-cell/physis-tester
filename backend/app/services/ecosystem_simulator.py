@@ -760,20 +760,26 @@ async def _fetch_html(url: str) -> tuple[int, str]:
         #
         # Phase 1: goto with domcontentloaded — fast, deterministic exit
         # once the HTML is parsed. Doesn't wait for React hydration.
-        # Phase 2: explicitly wait for the runtime-injected <nav> element
-        # that the ecosystem-nav useEffect renders after
-        # fetch('/api/ecosystem/by-id/…') resolves. Timeout is generous
-        # (10s) so a slow fetch still lands, but short enough that a
-        # single-app ecosystem (nav intentionally hidden — needs sibling
-        # count > 1) doesn't dominate the batch's wall-clock. Soft-fail:
-        # if the selector never appears we still return the current DOM
-        # so tests that don't depend on the nav still see the page.
+        # Phase 2: explicitly wait for the ECOSYSTEM sibling nav that the
+        # ecosystem-nav useEffect renders after fetch('/api/ecosystem/by-id/…')
+        # resolves. The selector `nav[data-ecosystem-name]` targets THAT
+        # specific element — a plain `nav` selector matches too early for
+        # multi-page apps because the multipage shell renders an internal
+        # page-nav <nav> synchronously (no fetch), returning before the
+        # ecosystem fetch has resolved and the sibling nav has mounted.
+        # Batch 15 evidence: with plain 'nav' the multi-page apps returned
+        # a DOM missing the ecosystem strip, so tests 22/23/25 read the
+        # first span/div text INSIDE the internal nav (e.g. "Your overview"
+        # from tracker_hub's dashboard page) as if it were the ecosystem
+        # name. Timeout is 10s — enough for a slow ecosystem fetch, short
+        # enough not to blow batch wall-clock. Soft-fail so tests that
+        # don't depend on the nav (Test 24 theme color etc.) still work.
         resp = await page.goto(
             url, timeout=INTEGRATION_FETCH_TIMEOUT * 1000,
             wait_until="domcontentloaded",
         )
         try:
-            await page.wait_for_selector("nav", timeout=10_000)
+            await page.wait_for_selector("nav[data-ecosystem-name]", timeout=10_000)
         except Exception:
             pass
         status = resp.status if resp else 0
