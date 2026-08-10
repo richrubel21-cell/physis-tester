@@ -748,14 +748,34 @@ async def _fetch_html(url: str) -> tuple[int, str]:
     try:
         context = await browser.new_context()
         page    = await context.new_page()
-        # domcontentloaded is not enough — Physis's shell issues its
-        # /api/ecosystem/by-id/… fetch AFTER parse + hydration. Wait for the
-        # network to go quiet so the sibling <a href> links and the
-        # ecosystem-name text node have landed in the DOM.
+        # Two-phase wait, replacing the old wait_until="networkidle".
+        # networkidle was timing out sporadically at scale (batch 12 evidence:
+        # some spokes returned empty page.content() even though their raw
+        # HTML clearly contains const ECOSYSTEM_ID and <nav data-ecosystem-
+        # name>). The deployed apps register a service worker that keeps
+        # network activity going indefinitely, so networkidle is never
+        # actually reached — the fetch just times out and page.content()
+        # returns whatever partial DOM existed at that point (often before
+        # React finished hydrating).
+        #
+        # Phase 1: goto with domcontentloaded — fast, deterministic exit
+        # once the HTML is parsed. Doesn't wait for React hydration.
+        # Phase 2: explicitly wait for the runtime-injected <nav> element
+        # that the ecosystem-nav useEffect renders after
+        # fetch('/api/ecosystem/by-id/…') resolves. Timeout is generous
+        # (10s) so a slow fetch still lands, but short enough that a
+        # single-app ecosystem (nav intentionally hidden — needs sibling
+        # count > 1) doesn't dominate the batch's wall-clock. Soft-fail:
+        # if the selector never appears we still return the current DOM
+        # so tests that don't depend on the nav still see the page.
         resp = await page.goto(
             url, timeout=INTEGRATION_FETCH_TIMEOUT * 1000,
-            wait_until="networkidle",
+            wait_until="domcontentloaded",
         )
+        try:
+            await page.wait_for_selector("nav", timeout=10_000)
+        except Exception:
+            pass
         status = resp.status if resp else 0
         body   = await page.content()
         return status, body or ""
