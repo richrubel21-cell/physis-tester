@@ -169,6 +169,14 @@ def _finalize_run_row(run_id: int, result: dict) -> None:
                 and result.get("all_powered_by_physis")
             )
 
+            # Customization Studio results (JSON string). Wrapped separately so
+            # a DB missing the column (startup migration hasn't ALTER'd) doesn't
+            # drop the whole finalize.
+            try:
+                run.customization_results = result.get("customization_results")
+            except Exception as exc:
+                print(f"[ecosystem] customization_results write skipped (run {run_id}): {exc}")
+
             run.completed_at       = datetime.utcnow()
         except SQLAlchemyError as exc:
             print(f"[ecosystem] finalize write failed (run {run_id}): {exc}")
@@ -294,6 +302,25 @@ async def _run_batch_background(batch_id: int, type_: str, app_count: int, scena
                 result["status"]      = "failed"
                 result["fail_reason"] = integration["integration_details"]
 
+            # Customization phase — only when the ecosystem itself passed
+            # (i.e. every app deployed + integration OK). Customizes one
+            # spoke and re-checks every other live app to confirm the
+            # customization didn't cascade a failure across the hub. Every
+            # error inside customization_tester is caught + returned as a
+            # labelled reason, so this call should never raise.
+            if result.get("passed"):
+                try:
+                    from ..services.customization_tester import run_ecosystem_customization_tests
+                    cust = await run_ecosystem_customization_tests(
+                        result.get("apps_detail") or []
+                    )
+                    result["customization_results"] = json.dumps(cust)
+                except Exception as exc:
+                    print(f"[ecosystem] customization phase crashed: {exc}")
+                    result["customization_results"] = json.dumps(
+                        {"phase": "error", "reason": f"phase crashed: {exc}"}
+                    )
+
             _finalize_run_row(run_id, result)
 
         # Belt-and-suspenders: _rollup_batch flips to 'failed' on its own
@@ -394,6 +421,10 @@ def _serialize_run(run: EcosystemRun) -> dict:
         "all_apps_output_passed":     bool(getattr(run, "all_apps_output_passed", False)),
         "ecosystem_functional_tests": _decode(getattr(run, "ecosystem_functional_tests", None)),
         "marketplace_eligible":   bool(getattr(run, "marketplace_eligible", False)),
+        # Customization Studio result dict — Style Studio + MARY on one
+        # spoke, plus sibling health snapshots. Absent when the phase
+        # didn't run (the ecosystem itself failed).
+        "customization_results":  _decode(getattr(run, "customization_results", None)),
         "created_at":             run.created_at.isoformat() if run.created_at else None,
         "completed_at":           run.completed_at.isoformat() if run.completed_at else None,
     }

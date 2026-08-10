@@ -90,6 +90,15 @@ def update_run(db: Session, run_id: int, sim_result: dict) -> Run:
             # core build outcome still lands.
             print(f"[run_service] validity write skipped (run {run_id}): {exc}")
 
+    # Customization results — always a JSON string when present. Wrapped
+    # separately so a DB missing the column (startup migration hasn't
+    # ALTER'd it yet) doesn't drop the rest of the update.
+    if "customization_results" in sim_result:
+        try:
+            run.customization_results = sim_result.get("customization_results")
+        except Exception as exc:
+            print(f"[run_service] customization_results write skipped (run {run_id}): {exc}")
+
     run.finished_at = datetime.utcnow()
     db.commit()
     db.refresh(run)

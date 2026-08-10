@@ -117,6 +117,12 @@ def get_batch_status(batch_id: int, db: Session = Depends(get_db)):
                 "functional_failure_screenshots": _decode_validity_tests(
                     getattr(r, "functional_failure_screenshots", None)
                 ),
+                # Customization Studio (Style Studio + MARY Changes + live-diff)
+                # — dict per apps/services/customization_tester. Absent = phase
+                # did not run for this build.
+                "customization_results":         _decode_last_event(
+                    getattr(r, "customization_results", None)
+                ),
             })
         except Exception as exc:
             # One bad row shouldn't blank the whole batch — drop it and

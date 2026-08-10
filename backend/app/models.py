@@ -80,6 +80,11 @@ class Run(Base):
     journey_passed                   = Column(Boolean, default=False)
     all_apps_output_passed           = Column(Boolean, default=False)
     functional_failure_screenshots   = Column(Text, nullable=True)
+    # Customization Studio results (Style Studio apply + MARY Changes edit +
+    # live-HTML diff verification). JSON string of the dict produced by
+    # services/customization_tester.py. Absent = phase did not run (e.g.
+    # build failed, so nothing to customize).
+    customization_results            = Column(Text, nullable=True)
     batch = relationship("Batch", back_populates="runs")
     scenario = relationship("Scenario", back_populates="runs")
 
@@ -204,6 +209,10 @@ class EcosystemRun(Base):
     ecosystem_functional_tests   = Column(Text, nullable=True)
     # Only true when every app passed its individual tests AND integration_score == 8
     marketplace_eligible  = Column(Boolean, default=False)
+    # Customization Studio results for one spoke in the ecosystem, plus the
+    # health snapshot of every other spoke afterwards. JSON string produced
+    # by services/customization_tester.run_ecosystem_customization_tests.
+    customization_results = Column(Text, nullable=True)
     created_at            = Column(DateTime, default=datetime.utcnow)
     completed_at          = Column(DateTime, nullable=True)
     batch                 = relationship("EcosystemBatch", back_populates="runs")

@@ -27,7 +27,7 @@ from .routes.admin import router as admin_router, cleanup_orphans_at_startup
 # `grep "[physis-tester] starting"` in Render Live Tail confirms which
 # revision is actually running. Stops us misdiagnosing "the new code
 # isn't taking effect" when really the image just hasn't rebuilt.
-VERSION_TAG = "test32-fingerprint"
+VERSION_TAG = "test33-customization-studio"
 print(f"[physis-tester] starting {VERSION_TAG}", flush=True)
 
 Base.metadata.create_all(bind=engine)
@@ -83,6 +83,10 @@ def _ensure_columns():
             # is the closed-set bucket the dashboard filters on.
             ("last_event",                     "TEXT"),
             ("error_type",                     "VARCHAR(64)"),
+            # Customization Studio results — JSON dict from
+            # services/customization_tester.run_customization_tests
+            # (Style Studio + MARY Changes + live-HTML diff).
+            ("customization_results",          "TEXT"),
         ]),
         # ecosystem_batches gained marketplace_eligible after the batch
         # rollup landed. Missing column was triggering UndefinedColumn on
@@ -109,6 +113,10 @@ def _ensure_columns():
             # Per-ecosystem marketplace eligibility — also added later,
             # also never migrated.
             ("marketplace_eligible",        "BOOLEAN DEFAULT FALSE"),
+            # Customization Studio results for the chosen target spoke +
+            # sibling health snapshots. JSON dict from
+            # services/customization_tester.run_ecosystem_customization_tests.
+            ("customization_results",       "TEXT"),
         ]),
     ]
     for table, cols in plans:

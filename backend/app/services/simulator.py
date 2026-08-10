@@ -339,6 +339,23 @@ async def run_single(description: str) -> dict:
                 f"Validity sweep failed (score {score}/7 — see validity_tests for details)"
             )
 
+    # Customization Studio phase — Style Studio + MARY Changes with live
+    # HTML diff. Only meaningful for a build that produced a working app
+    # (status=='passed' after the validity gate above). A failing build
+    # has nothing to customize and would just log a skipped-phase entry.
+    # Every failure inside customization_tester is caught and returned as
+    # a labelled reason; nothing here should ever raise.
+    if result.get("status") == "passed" and result.get("live_url"):
+        try:
+            from .customization_tester import run_customization_tests
+            cust = await run_customization_tests(result["live_url"])
+            result["customization_results"] = json.dumps(cust)
+        except Exception as exc:
+            logger.error("[simulator] customization phase crashed: %s", exc)
+            result["customization_results"] = json.dumps(
+                {"phase": "error", "reason": f"phase crashed: {exc}"}
+            )
+
     # Final outcome log line — INFO on pass, ERROR on failure. duration
     # is already set on the result dict in every code path.
     final_status = result.get("status") or "unknown"
