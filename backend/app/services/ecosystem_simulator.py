@@ -186,6 +186,19 @@ def _build_payload_for_app(app: dict, user_id: str, join_ecosystem: bool) -> dic
     tpl_id = str(app.get("template_id") or "").strip()
     if tpl_id:
         payload["template_id"] = tpl_id
+    # Thread page_count from the plan through — same class of info-loss the
+    # template_id fix addressed. Physis's planner decides per-app whether an
+    # app is single- vs multi-page (returns page_count 1..5), maps >1 to a
+    # multipage archetype (tracker_hub / booking_flow). Dropping it here
+    # meant multi-page-worthy apps always came out as 1-page single-page
+    # apps, so we never actually exercised the multipage shell in ecosystem
+    # mode. Passing it lets Physis honor its own plan.
+    try:
+        pc = int(app.get("page_count") or 0)
+    except Exception:
+        pc = 0
+    if pc >= 1:
+        payload["page_count"] = pc
     return payload
 
 
@@ -394,7 +407,29 @@ def _summarise_apps(apps_detail: list[dict]) -> dict:
 # Public entry points
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def run_full_ecosystem(description: str, app_count: int) -> dict:
+def _apply_min_multipage_apps(apps: list[dict], n: int) -> None:
+    """Force the first N apps in a plan to a multi-page archetype at page_count=3.
+
+    Guarantees ecosystem batches actually exercise the multipage shell instead
+    of relying on Claude to pick page_count > 1 per app (batch 11 evidence:
+    Claude returned page_count=1 for every app in a 3-app ecosystem, even the
+    ones assigned template_id=tracker_hub). Picks the archetype from the app's
+    own description keywords so the choice is coherent — booking_flow when the
+    app is about signup/booking/checkout, tracker_hub for the tracker/dashboard
+    default. Mutates in place; no-op when n <= 0."""
+    if n <= 0:
+        return
+    booking_keywords = (
+        "book", "appointment", "schedul", "reserv", "checkout", "order",
+        "sign up", "signup", "intake", "apply", "onboard", "registration", "enroll",
+    )
+    for app in apps[:n]:
+        text = " ".join(str(app.get(k) or "") for k in ("name", "purpose", "description")).lower()
+        app["template_id"] = "booking_flow" if any(w in text for w in booking_keywords) else "tracker_hub"
+        app["page_count"] = 3
+
+
+async def run_full_ecosystem(description: str, app_count: int, min_multipage_apps: int = 0) -> dict:
     """MODE A — plan + fan-out builds + verify."""
     start   = time.time()
     user_id = str(uuid.uuid4())
@@ -424,6 +459,7 @@ async def run_full_ecosystem(description: str, app_count: int) -> dict:
         }
 
     apps = plan["apps"]
+    _apply_min_multipage_apps(apps, min_multipage_apps)
     eco_tag = (description or "").strip().replace("\n", " ")[:30] or "(unnamed)"
 
     # Build apps strictly one-at-a-time. Sequential is a platform
@@ -526,7 +562,7 @@ def _evaluate_ecosystem_pass(apps_detail: list, summary: dict, planned_count: in
     return False, "ecosystem failed an unspecified gate"
 
 
-async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
+async def run_sequential_ecosystem(description: str, app_count: int, min_multipage_apps: int = 0) -> dict:
     """MODE B — plan, then build strictly one at a time with join_ecosystem=True."""
     start   = time.time()
     user_id = str(uuid.uuid4())
@@ -556,6 +592,7 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
         }
 
     apps        = plan["apps"]
+    _apply_min_multipage_apps(apps, min_multipage_apps)
     eco_tag     = (description or "").strip().replace("\n", " ")[:30] or "(unnamed)"
     apps_detail = []
     for idx, app in enumerate(apps, start=1):
@@ -620,11 +657,11 @@ async def run_sequential_ecosystem(description: str, app_count: int) -> dict:
     }
 
 
-async def run_single_ecosystem(description: str, app_count: int, mode: str) -> dict:
+async def run_single_ecosystem(description: str, app_count: int, mode: str, min_multipage_apps: int = 0) -> dict:
     """Dispatch by mode. mode ∈ {"full", "sequential"}."""
     if mode == "sequential":
-        return await run_sequential_ecosystem(description, app_count)
-    return await run_full_ecosystem(description, app_count)
+        return await run_sequential_ecosystem(description, app_count, min_multipage_apps=min_multipage_apps)
+    return await run_full_ecosystem(description, app_count, min_multipage_apps=min_multipage_apps)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -958,7 +995,7 @@ def _extract_ecosystem_id(html: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-async def _test_cross_app_event_roundtrip(apps: list[dict], htmls: dict[str, str]) -> dict:
+async def _test_cross_app_event_roundtrip(apps: list[dict], htmls: dict[str, str], raw_htmls: dict[str, str]) -> dict:
     """Test 47 — genuine cross-app data connectivity via the hub event bus.
 
     Test 27 ('Shared Data Layer') only verifies subdomain uniqueness — a
@@ -997,8 +1034,18 @@ async def _test_cross_app_event_roundtrip(apps: list[dict], htmls: dict[str, str
             f"Could not parse subdomains from {A.get('live_url')} / {B.get('live_url')}",
         )
 
-    eco_id_A = _extract_ecosystem_id(htmls.get(A["live_url"], ""))
-    eco_id_B = _extract_ecosystem_id(htmls.get(B["live_url"], ""))
+    # Use the raw httpx HTML (not Playwright-rendered) because the const
+    # lives inside <script type="text/babel"> in the SOURCE — that's what
+    # gets baked into the R2 upload and shipped to every browser. Playwright
+    # rendering is flaky at "networkidle" for these apps (service-worker
+    # keep-alive + parallel-fetch contention causes some spokes to time out
+    # and return an empty body — batch 12 evidence: spoke A got the id,
+    # spoke B came back empty even though its raw HTML clearly has
+    # `const ECOSYSTEM_ID = '<uuid>'`). Raw HTML is deterministic and
+    # matches the test's intent — verify the id BAKED into deployed source,
+    # not the id present in the post-hydration DOM.
+    eco_id_A = _extract_ecosystem_id(raw_htmls.get(A["live_url"], "") or htmls.get(A["live_url"], ""))
+    eco_id_B = _extract_ecosystem_id(raw_htmls.get(B["live_url"], "") or htmls.get(B["live_url"], ""))
     if not eco_id_A:
         return _test_result(
             47, "Cross-App Event Round-Trip", False,
@@ -1142,7 +1189,7 @@ async def run_integration_tests(ecosystem_apps: list[dict]) -> dict:
         await _test_shared_data_layer(deployed),
         await _test_ai_engine_present(deployed, htmls, raw_htmls),
         await _test_powered_by_physis(deployed, htmls, raw_htmls),
-        await _test_cross_app_event_roundtrip(deployed, htmls),
+        await _test_cross_app_event_roundtrip(deployed, htmls, raw_htmls),
     ]
 
     # 9 tests now (22-29 legacy + 47 cross-app data). Score threshold moves

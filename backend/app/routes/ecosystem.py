@@ -36,6 +36,12 @@ class EcosystemBatchRequest(BaseModel):
     scenario_count: int = 5           # how many business scenarios to run
     app_count:      int = 3           # 2 or 3 — applied to every scenario in the batch
     type:           str = "full"      # "full" | "sequential"
+    # 0 = let Physis's planner decide per-app (default). N > 0 = force the first
+    # N apps in each ecosystem to a multi-page template (tracker_hub or
+    # booking_flow, picked by keyword) at page_count=3, so ecosystem batches
+    # exercise the multipage shell deterministically instead of hoping Claude
+    # picks page_count > 1.
+    min_multipage_apps: int = 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +248,7 @@ def _rollup_batch(batch_id: int) -> bool:
         db.close()
 
 
-async def _run_batch_background(batch_id: int, type_: str, app_count: int, scenarios: list[dict]) -> None:
+async def _run_batch_background(batch_id: int, type_: str, app_count: int, scenarios: list[dict], min_multipage_apps: int = 0) -> None:
     """
     Run every ecosystem scenario, writing per-scenario outcomes to
     ecosystem_runs as they complete. Each DB interaction uses a fresh
@@ -262,7 +268,7 @@ async def _run_batch_background(batch_id: int, type_: str, app_count: int, scena
                 continue
 
             try:
-                result = await run_single_ecosystem(description, app_count, type_)
+                result = await run_single_ecosystem(description, app_count, type_, min_multipage_apps=min_multipage_apps)
             except Exception as exc:
                 result = {
                     "status":             "error",
@@ -364,7 +370,7 @@ async def start_ecosystem_batch(body: EcosystemBatchRequest, db: Session = Depen
     batch_id = batch.id
 
     asyncio.create_task(
-        _run_batch_background(batch_id, body.type, body.app_count, scenarios)
+        _run_batch_background(batch_id, body.type, body.app_count, scenarios, min_multipage_apps=max(0, min(body.min_multipage_apps, body.app_count)))
     )
 
     return {
