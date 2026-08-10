@@ -857,6 +857,130 @@ async def _test_powered_by_physis(apps: list[dict], htmls: dict[str, str]) -> di
     return _test_result(29, "Powered by Physis Present", passed, detail)
 
 
+# Regex for the ECOSYSTEM_ID Physis bakes into every deployed app's JSX.
+# Every app in a genuine ecosystem carries the same value — both extracted
+# (proves the apps are actually siblings) and used to address the hub bus.
+_ECOSYSTEM_ID_RE = re.compile(r"ECOSYSTEM_ID\s*=\s*['\"]([^'\"]+)['\"]")
+
+
+def _extract_ecosystem_id(html: str) -> str:
+    """Pull the baked-in ECOSYSTEM_ID from a deployed app's JSX. Empty
+    string when the marker isn't found (e.g. app deployed without an
+    ecosystem id — shouldn't happen for ecosystem-mode builds)."""
+    if not html:
+        return ""
+    m = _ECOSYSTEM_ID_RE.search(html)
+    return m.group(1).strip() if m else ""
+
+
+async def _test_cross_app_event_roundtrip(apps: list[dict], htmls: dict[str, str]) -> dict:
+    """Test 47 — genuine cross-app data connectivity via the hub event bus.
+
+    Test 27 ('Shared Data Layer') only verifies subdomain uniqueness — a
+    static invariant that says nothing about data actually flowing between
+    siblings. THIS test does the real round-trip that production siblings
+    use: one spoke publishes a state change to the hub, another spoke
+    (represented here by an independent GET against the same ecosystem's
+    event bus) reads it back.
+
+    Uses only PUBLIC endpoints — the hub bus is auth-less by design so
+    deployed *.myphysis.ai apps can hit it with no login token. No test-user
+    Bearer needed here; the physis-side gate is 'source_subdomain must be a
+    member of THIS ecosystem', which our just-built spoke satisfies.
+
+    PASS when:
+      * ≥2 apps have live URLs AND identical ECOSYSTEM_ID baked in
+      * A POST /api/ecosystem/{id}/events from spoke A returns ok
+      * A subsequent GET /api/ecosystem/{id}/events surfaces the marker
+
+    FAIL surfaces the specific step that broke — publish rejected,
+    marker missing after read-back, ecosystem id mismatch, etc.
+    """
+    live = [a for a in apps if a.get("live_url")]
+    if len(live) < 2:
+        return _test_result(
+            47, "Cross-App Event Round-Trip", False,
+            f"Need ≥2 live apps, got {len(live)}",
+        )
+
+    A, B = live[0], live[1]
+    A_sub = _extract_subdomain(A["live_url"])
+    B_sub = _extract_subdomain(B["live_url"])
+    if not A_sub or not B_sub:
+        return _test_result(
+            47, "Cross-App Event Round-Trip", False,
+            f"Could not parse subdomains from {A.get('live_url')} / {B.get('live_url')}",
+        )
+
+    eco_id_A = _extract_ecosystem_id(htmls.get(A["live_url"], ""))
+    eco_id_B = _extract_ecosystem_id(htmls.get(B["live_url"], ""))
+    if not eco_id_A:
+        return _test_result(
+            47, "Cross-App Event Round-Trip", False,
+            f"No ECOSYSTEM_ID baked into spoke A ({A_sub}) — ecosystem-mode build didn't stamp it",
+        )
+    if eco_id_A != eco_id_B:
+        return _test_result(
+            47, "Cross-App Event Round-Trip", False,
+            f"Spokes carry different ECOSYSTEM_IDs: A={eco_id_A[:8]} B={eco_id_B[:8]}",
+        )
+
+    marker = f"tester-probe-{uuid.uuid4().hex[:12]}"
+    events_url = f"{PHYSIS_BASE_URL}/api/ecosystem/{eco_id_A}/events"
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            pub = await client.post(events_url, json={
+                "event_type":       "tester_probe",
+                "payload":          {"marker": marker, "from": A_sub},
+                "source_subdomain": A_sub,
+            })
+            if pub.status_code != 200:
+                return _test_result(
+                    47, "Cross-App Event Round-Trip", False,
+                    f"Publish HTTP {pub.status_code}: {pub.text[:200]}",
+                )
+            pub_body = pub.json() if pub.headers.get("content-type", "").startswith("application/json") else {}
+            if not pub_body.get("ok"):
+                return _test_result(
+                    47, "Cross-App Event Round-Trip", False,
+                    f"Publish returned ok=false: {str(pub_body)[:200]}",
+                )
+
+            # Physis writes the row synchronously in the endpoint, but
+            # give Supabase a beat in case of replica lag before we read
+            # back from what may or may not be the same node.
+            await asyncio.sleep(2)
+
+            got = await client.get(f"{events_url}?limit=50")
+            if got.status_code != 200:
+                return _test_result(
+                    47, "Cross-App Event Round-Trip", False,
+                    f"Read HTTP {got.status_code}: {got.text[:200]}",
+                )
+            events = (got.json() or {}).get("events") or []
+
+    except Exception as exc:
+        return _test_result(
+            47, "Cross-App Event Round-Trip", False,
+            f"Round-trip crashed: {exc}",
+        )
+
+    seen = any((e.get("payload") or {}).get("marker") == marker for e in events)
+    if not seen:
+        return _test_result(
+            47, "Cross-App Event Round-Trip", False,
+            f"Published from {A_sub} but marker {marker!r} not in first 50 events "
+            f"({len(events)} returned) — sibling read-back would not see it",
+        )
+
+    return _test_result(
+        47, "Cross-App Event Round-Trip", True,
+        f"Event from {A_sub} readable via ecosystem event bus (id={eco_id_A[:8]}, "
+        f"{len(live)} siblings all share it)",
+    )
+
+
 async def run_integration_tests(ecosystem_apps: list[dict]) -> dict:
     """
     Run the 8 ecosystem integration tests (22–29) against the set of apps that
@@ -894,6 +1018,7 @@ async def run_integration_tests(ecosystem_apps: list[dict]) -> dict:
                 (27, "Shared Data Layer"),
                 (28, "AI Engine Present"),
                 (29, "Powered by Physis Present"),
+                (47, "Cross-App Event Round-Trip"),
             ]
         ]
         return {
@@ -921,14 +1046,18 @@ async def run_integration_tests(ecosystem_apps: list[dict]) -> dict:
         await _test_shared_data_layer(deployed),
         await _test_ai_engine_present(deployed, htmls),
         await _test_powered_by_physis(deployed, htmls),
+        await _test_cross_app_event_roundtrip(deployed, htmls),
     ]
 
+    # 9 tests now (22-29 legacy + 47 cross-app data). Score threshold moves
+    # with the test count so integration_passed still means "every one".
+    total = len(tests)
     score = sum(t["score"] for t in tests)
-    passed = score == 8
+    passed = score == total
     details = (
-        f"All 8 integration tests passed"
+        f"All {total} integration tests passed"
         if passed
-        else f"{8 - score} integration test(s) failed: "
+        else f"{total - score} integration test(s) failed: "
              + ", ".join(t["name"] for t in tests if not t["passed"])
     )
     return {
